@@ -117,7 +117,7 @@ object AppConfig {
     const val GITHUB_DOWNLOAD_URL = "$GITHUB_URL/%s/releases/latest/download"
     const val ANDROID_PACKAGE_NAME_LIST_URL = "$GITHUB_RAW_URL/2dust/androidpackagenamelist/master/proxy.txt"
     const val APP_URL = "https://limm.space/vpn"
-    const val APP_API_URL = "https://limm.space/vpn/releases"
+    const val APP_API_URL = "https://limm.space/vpn/apk"
     const val APP_ISSUES_URL = APP_URL
     const val APP_WIKI_MODE = APP_URL
     const val APP_PRIVACY_POLICY = "$GITHUB_RAW_URL/2dust/v2rayNG/master/CR.md"

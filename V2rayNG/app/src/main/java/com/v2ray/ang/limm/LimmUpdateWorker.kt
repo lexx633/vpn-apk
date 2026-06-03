@@ -22,7 +22,7 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
- * Checks limm.space/vpn/releases/latest once every 6 hours.
+ * Checks limm.space/vpn/apk/latest once every 6 hours.
  * If a newer version is found, downloads the APK to cache and posts
  * a notification. Tapping the notification launches the system installer.
  */
@@ -58,7 +58,7 @@ class LimmUpdateWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
 
             // Fetch latest release info
             val resp = client.newCall(
-                Request.Builder().url("${LimmConfig.collectorUrl}/vpn/releases/latest")
+                Request.Builder().url("${LimmConfig.collectorUrl}/vpn/apk/latest")
                     .header("Cache-Control", "no-cache").build()
             ).execute().use { r ->
                 if (!r.isSuccessful) return
