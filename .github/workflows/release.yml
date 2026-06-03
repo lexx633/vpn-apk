@@ -132,3 +132,6 @@ jobs:
             chmod 644 /var/www/limm/vpn/limm-vpn.apk
             echo '{"build":"${{ github.sha }}","version":"${{ inputs.version }}"}' \
               > /var/www/limm/vpn/apk-info.json
+            mkdir -p /var/www/limm/vpn/releases
+            echo '{"tag_name":"v${{ inputs.version }}","prerelease":false,"body":"limm VPN v${{ inputs.version }}","assets":[{"name":"limm-vpn_arm64-v8a.apk","browser_download_url":"https://limm.space/vpn/limm-vpn.apk"}]}' \
+              > /var/www/limm/vpn/releases/latest
