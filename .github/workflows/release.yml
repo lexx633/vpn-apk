@@ -135,6 +135,10 @@ jobs:
           script: |
             mv -f /tmp/${{ steps.apk.outputs.name }} /var/www/limm/vpn/limm-vpn.apk
             chmod 644 /var/www/limm/vpn/limm-vpn.apk
+            # Versioned copy with short hash suffix; delete previous versioned files first
+            SHORTHASH=$(echo "${{ github.sha }}" | cut -c37-40)
+            find /var/www/limm/vpn -maxdepth 1 -name 'limm-vpn_*.apk' -delete
+            cp /var/www/limm/vpn/limm-vpn.apk /var/www/limm/vpn/limm-vpn_${SHORTHASH}.apk
             echo '{"build":"${{ github.sha }}","version":"${{ inputs.version }}"}' \
               > /var/www/limm/vpn/apk-info.json
             mkdir -p /var/www/limm/vpn/releases
