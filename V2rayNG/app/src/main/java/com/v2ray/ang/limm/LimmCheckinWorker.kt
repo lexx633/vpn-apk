@@ -146,6 +146,32 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             }
         } catch (e: Exception) { false }
 
+        /**
+         * Проверка пользовательского сервиса через туннель: тянем страницу и классифицируем
+         * "ok|blocked|down". Гео-блок отдаёт 451 либо текст-маркер ("not available in your
+         * country"). Cloudflare anti-bot (403 "just a moment") — НЕ гео-блок, край достижим → ok.
+         * Исключение (нет соединения / DNS / таймаут) → down.
+         */
+        private fun probeServiceViaSocks(url: String, socksPort: Int, markers: List<String>, timeoutSec: Long = 12): String {
+            val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
+            val c = OkHttpClient.Builder()
+                .proxy(proxy)
+                .connectTimeout(timeoutSec, TimeUnit.SECONDS)
+                .readTimeout(timeoutSec, TimeUnit.SECONDS)
+                .followRedirects(true)
+                .build()
+            return try {
+                c.newCall(Request.Builder().url(url).header("User-Agent", "Mozilla/5.0 (limm-probe)").build())
+                    .execute().use { r ->
+                        val code = r.code
+                        val body = (try { r.body?.string() ?: "" } catch (e: Exception) { "" }).lowercase()
+                        if (code == 451 || markers.any { body.contains(it) }) "blocked" else "ok"
+                    }
+            } catch (e: Exception) {
+                "down"
+            }
+        }
+
         private fun runLadder(ctx: Context): JSONObject {
             val srvIp = LimmConfig.serverIp
             val socksPort = try { com.v2ray.ang.handler.SettingsManager.getSocksPort() } catch (e: Exception) { 10808 }
@@ -170,6 +196,7 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             var browserHost: String? = null
             var destGoogle: Int? = null
             var destTelegram: Int? = null
+            var services: JSONObject? = null
 
             if (l0 == 1) {
                 l1 = if (tcpOk(srvIp, 443)) 1 else 0
@@ -198,11 +225,19 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 val (site, _) = httpGetViaSocks("https://www.gstatic.com/generate_204", socksPort)
                 browserOk = if (g204 || site) 1 else 0
                 browserHost = if (g204) "google" else if (site) "gstatic" else "none"
-                // Раздельная достижимость целей через туннель (в raw, без новых колонок в БД):
-                //  Google — generate_204 (g204 выше), Telegram — api.telegram.org (непустое тело).
-                val (tg, _) = httpGetViaSocks("https://api.telegram.org", socksPort)
-                destGoogle = if (g204) 1 else 0
-                destTelegram = if (tg) 1 else 0
+                // Сервисы через туннель (в raw, без новых колонок в БД): TG / Google / ChatGPT
+                // с классификацией ok|blocked|down (реально тянем страницу, см. probeServiceViaSocks).
+                val chgptMarkers = listOf(
+                    "unsupported_country", "not available in your country",
+                    "is not available in your", "openai's services are not available"
+                )
+                services = JSONObject().apply {
+                    put("tg", probeServiceViaSocks("https://web.telegram.org/", socksPort, emptyList()))
+                    put("ggl", probeServiceViaSocks("https://www.google.com/search?q=test", socksPort, emptyList()))
+                    put("chgpt", probeServiceViaSocks("https://chatgpt.com/", socksPort, chgptMarkers))
+                }
+                destGoogle = if (services.getString("ggl") == "ok") 1 else 0
+                destTelegram = if (services.getString("tg") == "ok") 1 else 0
             }
 
             return JSONObject().apply {
@@ -225,6 +260,7 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 put("raw", JSONObject().apply {
                     put("dest_google", destGoogle ?: JSONObject.NULL)
                     put("dest_telegram", destTelegram ?: JSONObject.NULL)
+                    put("services", services ?: JSONObject.NULL)
                 })
                 put("app_version", LimmConfig.appVersion)
                 put("os_version", "Android ${Build.VERSION.RELEASE}")
