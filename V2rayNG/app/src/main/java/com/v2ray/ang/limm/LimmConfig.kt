@@ -26,7 +26,13 @@ object LimmConfig {
     /** Short git SHA of the build, so the dashboard can tell fresh data from stale-app data. */
     val build: String get() = BuildConfig.LIMM_BUILD
 
-    /** app_version string sent in every check-in/log payload, e.g. "limm-android-1.2+0210328". */
+    /** Last 4 hex chars of build SHA — matches the #XXXX shown on limm.space/stat footer. */
+    val buildTag: String get() = BuildConfig.LIMM_BUILD.takeLast(4)
+
+    /** Human-readable version with build tag shown in update checker, e.g. "2.2.3.3 #c14a". */
+    val displayVersion: String get() = "${BuildConfig.VERSION_NAME} #${buildTag}"
+
+    /** app_version string sent in every check-in/log payload. */
     val appVersion: String get() = "limm-android-1.2+${BuildConfig.LIMM_BUILD}"
 
     /** True if the build was provided a server UUID (otherwise auto-import/check-in are no-ops). */

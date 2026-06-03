@@ -36,7 +36,7 @@ class CheckUpdateActivity : BaseActivity() {
         }
         binding.checkPreRelease.isChecked = MmkvManager.decodeSettingsBool(AppConfig.PREF_CHECK_UPDATE_PRE_RELEASE, false)
 
-        "v${BuildConfig.VERSION_NAME} (${CoreNativeManager.getLibVersion()})".also {
+        "${com.v2ray.ang.limm.LimmConfig.displayVersion} (${CoreNativeManager.getLibVersion()})".also {
             binding.tvVersion.text = it
         }
 

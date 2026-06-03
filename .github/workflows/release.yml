@@ -34,6 +34,7 @@ jobs:
             echo "LIMM_TOKEN=${{ secrets.LIMM_TOKEN }}"
             echo "LIMM_LABEL=mob"
             echo "LIMM_REALITY_SID=${{ secrets.LIMM_REALITY_SID }}"
+            echo "LIMM_BUILD_SHA=${{ github.sha }}"
           } > V2rayNG/limm.properties
 
       # Override sdk.dir for Linux (ubuntu-latest has ANDROID_HOME pre-set, but local.properties
@@ -139,6 +140,9 @@ jobs:
             SHORTHASH=$(echo "${{ github.sha }}" | cut -c37-40)
             find /var/www/limm/vpn -maxdepth 1 -name 'limm-vpn_*.apk' -delete
             cp /var/www/limm/vpn/limm-vpn.apk /var/www/limm/vpn/limm-vpn_${SHORTHASH}.apk
+            sed -i "s|return 302 /vpn/limm-vpn_[a-f0-9]*\.apk|return 302 /vpn/limm-vpn_${SHORTHASH}.apk|" \
+              /etc/nginx/sites-enabled/limm.conf
+            sudo systemctl reload nginx
             echo '{"build":"${{ github.sha }}","version":"${{ inputs.version }}"}' \
               > /var/www/limm/vpn/apk-info.json
             mkdir -p /var/www/limm/vpn/releases

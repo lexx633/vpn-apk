@@ -13,16 +13,18 @@ val limmProps = Properties().apply {
 }
 fun limm(key: String, default: String = ""): String = limmProps.getProperty(key) ?: default
 
-// --- limm VPN: short git SHA of the current HEAD, baked into the build so the /stat
-//     dashboard can show which app build a check-in came from (fresh vs stale). ---
-val limmBuildHash: String = try {
-    val p = ProcessBuilder("git", "rev-parse", "--short", "HEAD")
-        .directory(rootProject.rootDir)
-        .redirectErrorStream(true)
-        .start()
-    p.inputStream.bufferedReader().readText().trim().ifEmpty { "nogit" }
-} catch (e: Exception) {
-    "nogit"
+// CI injects full github SHA via limm.properties so app hash matches the footer on limm.space/stat.
+// Locally falls back to short git SHA.
+val limmBuildHash: String = limm("LIMM_BUILD_SHA").ifEmpty {
+    try {
+        val p = ProcessBuilder("git", "rev-parse", "--short", "HEAD")
+            .directory(rootProject.rootDir)
+            .redirectErrorStream(true)
+            .start()
+        p.inputStream.bufferedReader().readText().trim().ifEmpty { "nogit" }
+    } catch (e: Exception) {
+        "nogit"
+    }
 }
 
 android {
