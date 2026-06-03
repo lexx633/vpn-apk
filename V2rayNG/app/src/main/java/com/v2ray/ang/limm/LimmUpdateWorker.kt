@@ -106,7 +106,7 @@ class LimmUpdateWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
             )
 
             val notif = NotificationCompat.Builder(ctx, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_status_vpn)
+                .setSmallIcon(R.drawable.ic_stat_name)
                 .setContentTitle("limm VPN $version готов")
                 .setContentText("Нажми для установки обновления")
                 .setContentIntent(pi)
