@@ -117,6 +117,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Flatten APK to workspace root so scp-action doesn't recreate subdirs on server.
+      # (scp-action preserves the full relative path when source is deep in a tree.)
+      - name: Flatten APK for upload
+        run: cp "${{ steps.apk.outputs.path }}" limm-vpn-upload.apk
+
       # Deploy to limm.space. Secret DEPLOY_SSH_KEY: private key for deploy@45.95.175.170
       - name: Upload APK to server
         uses: appleboy/scp-action@v0.1.7
@@ -124,7 +129,7 @@ jobs:
           host: 45.95.175.170
           username: deploy
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          source: ${{ steps.apk.outputs.path }}
+          source: limm-vpn-upload.apk
           target: /tmp/
 
       - name: Swap APK and update apk-info.json
@@ -134,7 +139,7 @@ jobs:
           username: deploy
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
-            mv -f /tmp/${{ steps.apk.outputs.name }} /var/www/limm/vpn/limm-vpn.apk
+            mv -f /tmp/limm-vpn-upload.apk /var/www/limm/vpn/limm-vpn.apk
             chmod 644 /var/www/limm/vpn/limm-vpn.apk
             # Versioned copy with short hash suffix; delete previous versioned files first
             SHORTHASH=$(echo "${{ github.sha }}" | cut -c37-40)
