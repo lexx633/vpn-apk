@@ -148,8 +148,9 @@ jobs:
             echo "return 302 /vpn/limm-vpn_${SHORTHASH}.apk;" \
               > /var/www/limm/vpn/_app_redirect.conf
             sudo systemctl reload nginx
+            # apk-info.json — единый источник версии. /vpn/releases/latest для
+            # встроенного апдейтера nginx вычисляет из него на лету (api.py
+            # /api/app-release/latest), поэтому отдельный файл больше не пишем —
+            # раньше он расходился с apk-info.json и приложение не видело апдейт (E-018).
             echo '{"build":"${{ github.sha }}","version":"${{ inputs.version }}"}' \
               > /var/www/limm/vpn/apk-info.json
-            mkdir -p /var/www/limm/vpn/releases
-            echo '{"tag_name":"v${{ inputs.version }}","prerelease":false,"body":"limm VPN v${{ inputs.version }}","assets":[{"name":"limm-vpn_arm64-v8a.apk","browser_download_url":"https://limm.space/vpn/limm-vpn.apk"}]}' \
-              > /var/www/limm/vpn/releases/latest
