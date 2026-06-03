@@ -731,10 +731,16 @@ object CoreConfigManager {
         }
 
         // DNS dns
+        // When IPv6 is disabled, force UseIPv4 so AAAA lookups don't stall the
+        // cold tunnel at startup (every domain otherwise waits out an AAAA timeout
+        // through the not-yet-established proxy, causing a 15-20s "nothing loads" window).
+        val queryStrategy =
+            if (MmkvManager.decodeSettingsBool(AppConfig.PREF_IPV6_ENABLED) != true) "UseIPv4" else null
         v2rayConfig.dns = V2rayConfig.DnsBean(
             servers = servers,
             hosts = hosts,
             tag = AppConfig.TAG_DNS,
+            queryStrategy = queryStrategy,
             enableParallelQuery = if ((domesticDns.size + remoteDns.size) > 2) true else null
         )
 
