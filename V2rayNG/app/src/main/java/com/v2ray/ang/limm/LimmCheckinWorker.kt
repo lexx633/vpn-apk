@@ -168,6 +168,8 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
 
             var browserOk: Int? = null
             var browserHost: String? = null
+            var destGoogle: Int? = null
+            var destTelegram: Int? = null
 
             if (l0 == 1) {
                 l1 = if (tcpOk(srvIp, 443)) 1 else 0
@@ -196,6 +198,11 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 val (site, _) = httpGetViaSocks("https://www.gstatic.com/generate_204", socksPort)
                 browserOk = if (g204 || site) 1 else 0
                 browserHost = if (g204) "google" else if (site) "gstatic" else "none"
+                // Раздельная достижимость целей через туннель (в raw, без новых колонок в БД):
+                //  Google — generate_204 (g204 выше), Telegram — api.telegram.org (непустое тело).
+                val (tg, _) = httpGetViaSocks("https://api.telegram.org", socksPort)
+                destGoogle = if (g204) 1 else 0
+                destTelegram = if (tg) 1 else 0
             }
 
             return JSONObject().apply {
@@ -215,6 +222,10 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 put("vpn_running", vpnRunning)
                 put("browser_ok", browserOk ?: JSONObject.NULL)
                 put("browser_host", browserHost ?: JSONObject.NULL)
+                put("raw", JSONObject().apply {
+                    put("dest_google", destGoogle ?: JSONObject.NULL)
+                    put("dest_telegram", destTelegram ?: JSONObject.NULL)
+                })
                 put("app_version", LimmConfig.appVersion)
                 put("os_version", "Android ${Build.VERSION.RELEASE}")
             }
