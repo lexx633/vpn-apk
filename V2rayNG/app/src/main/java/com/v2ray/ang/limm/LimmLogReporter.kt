@@ -47,7 +47,7 @@ object LimmLogReporter {
                 .build()
             client.newCall(req).execute().use { r ->
                 if (r.isSuccessful) {
-                    true to "Log sent (#${LimmConfig.clientUid.take(8)})"
+                    true to "Log sent (#${LimmConfig.clientUid(context).take(8)})"
                 } else {
                     false to "Server returned ${r.code}"
                 }
@@ -71,7 +71,7 @@ object LimmLogReporter {
         } else "no server selected"
 
         return JSONObject().apply {
-            put("client_uid", LimmConfig.clientUid)
+            put("client_uid", LimmConfig.clientUid(context))
             put("label", LimmConfig.label.ifEmpty { "android-" + (Build.MODEL ?: "device") })
             put("kind", "android")
             put("ts", System.currentTimeMillis() / 1000)

@@ -1,5 +1,7 @@
 package com.v2ray.ang.limm
 
+import android.content.Context
+import android.provider.Settings
 import com.tencent.mmkv.MMKV
 import com.v2ray.ang.BuildConfig
 import java.util.UUID
@@ -38,16 +40,22 @@ object LimmConfig {
     /** True if the build was provided a server UUID (otherwise auto-import/check-in are no-ops). */
     fun isConfigured(): Boolean = BuildConfig.LIMM_VLESS_UUID.isNotEmpty()
 
-    /** Stable per-device client id shown on limm.space/stat. Generated once, persisted in MMKV. */
-    val clientUid: String
-        get() {
-            var v = mmkv.decodeString(KEY_CLIENT_UID, "") ?: ""
-            if (v.isEmpty()) {
-                v = UUID.randomUUID().toString()
-                mmkv.encode(KEY_CLIENT_UID, v)
-            }
-            return v
-        }
+    /**
+     * Stable per-device client id — survives app reinstall.
+     * Uses Android ID (unique per device, reset only on factory reset).
+     * Falls back to a persisted random UUID on devices where ANDROID_ID is unreliable.
+     */
+    fun clientUid(ctx: Context): String {
+        val androidId = try {
+            Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ANDROID_ID)
+                ?.takeIf { it.length > 4 && it != "9774d56d682e549c" } // filter known bad emulator value
+        } catch (_: Exception) { null }
+        if (androidId != null) return "android-$androidId"
+        // Fallback: random UUID persisted in MMKV
+        var v = mmkv.decodeString(KEY_CLIENT_UID, "") ?: ""
+        if (v.isEmpty()) { v = UUID.randomUUID().toString(); mmkv.encode(KEY_CLIENT_UID, v) }
+        return v
+    }
 
     /** Builds the VLESS+REALITY share link consumed by AngConfigManager.importBatchConfig. */
     fun vlessLink(): String {

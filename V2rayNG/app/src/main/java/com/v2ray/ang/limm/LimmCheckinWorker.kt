@@ -199,7 +199,7 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             }
 
             return JSONObject().apply {
-                put("client_uid", LimmConfig.clientUid)
+                put("client_uid", LimmConfig.clientUid(ctx))
                 put("kind", "android")
                 put("label", LimmConfig.label.ifEmpty { "android-" + (Build.MODEL ?: "device") })
                 put("server", LimmConfig.serverName)
