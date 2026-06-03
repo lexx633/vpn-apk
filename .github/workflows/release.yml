@@ -45,6 +45,11 @@ jobs:
         run: |
           sed -i 's/versionName = "[^"]*"/versionName = "${{ inputs.version }}"/' \
             V2rayNG/app/build.gradle.kts
+          # versionCode from version parts: 2.2.3.2 → 2020302 (M*1000000 + m*10000 + p*100 + b)
+          IFS='.' read -r V1 V2 V3 V4 <<< "${{ inputs.version }}"
+          VC=$(( ${V1:-0}*1000000 + ${V2:-0}*10000 + ${V3:-0}*100 + ${V4:-0} ))
+          sed -i "s/versionCode = [0-9]*/versionCode = $VC/" \
+            V2rayNG/app/build.gradle.kts
 
       # Install NDK needed to compile hev-socks5-tunnel
       - name: Install NDK
