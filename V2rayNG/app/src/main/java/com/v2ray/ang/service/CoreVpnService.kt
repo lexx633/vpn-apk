@@ -28,6 +28,13 @@ import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.MyContextWrapper
 import com.v2ray.ang.util.Utils
 import java.lang.ref.SoftReference
+import java.net.InetSocketAddress
+import java.net.Socket
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @SuppressLint("VpnServicePolicy")
 class CoreVpnService : VpnService(), ServiceControl {
@@ -114,10 +121,67 @@ class CoreVpnService : VpnService(), ServiceControl {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         LogUtil.i(AppConfig.TAG, "StartCore-VPN: Service command received")
         NotificationManager.showNotification(null)
-        setupVpnService()
-        startService()
+        if (SettingsManager.isUsingHevTun()) {
+            // hev-tun mode: xray uses tunFd=0 (SOCKS-only), hev-tun bridges TUN→SOCKS.
+            // Pre-start xray in background so SOCKS is ready before TUN is established —
+            // eliminates the cold-start window where hev-tun drops packets because xray
+            // hasn't started listening yet.
+            startHevTunWithWarmup()
+        } else {
+            setupVpnService()
+            startService()
+        }
         return START_STICKY
-        //return super.onStartCommand(intent, flags, startId)
+    }
+
+    /**
+     * Cold-start fix for hev-tun mode.
+     * Starts xray first (SOCKS only, no TUN fd), waits until the SOCKS port responds,
+     * then establishes the VPN TUN interface and starts hev-tun.  By the time hev-tun
+     * tries to forward the first packet, xray is already listening — no DNS timeouts.
+     */
+    private fun startHevTunWithWarmup() {
+        CoroutineScope(Dispatchers.IO).launch {
+            // Phase 1 — start xray in SOCKS-only mode (tunFd=0 for hev-tun anyway).
+            val started = CoreServiceManager.startCoreLoop(null)
+            if (!started) {
+                LogUtil.e(AppConfig.TAG, "StartCore-VPN: warmup xray start failed")
+                withContext(Dispatchers.Main) { stopAllService() }
+                return@launch
+            }
+            // Phase 2 — wait for SOCKS to be reachable (max 10 s).
+            val socksPort = SettingsManager.getSocksPort()
+            val deadline = System.currentTimeMillis() + 10_000L
+            var socksReady = false
+            while (System.currentTimeMillis() < deadline) {
+                if (!isRunning) {
+                    // Service was stopped while we were waiting (user cancelled).
+                    CoreServiceManager.stopCoreLoop()
+                    return@launch
+                }
+                try {
+                    Socket().use { s -> s.connect(InetSocketAddress("127.0.0.1", socksPort), 300) }
+                    socksReady = true
+                    break
+                } catch (_: Exception) {
+                    delay(100)
+                }
+            }
+            if (!socksReady) {
+                LogUtil.e(AppConfig.TAG, "StartCore-VPN: SOCKS not ready after 10 s, aborting")
+                CoreServiceManager.stopCoreLoop()
+                withContext(Dispatchers.Main) { stopAllService() }
+                return@launch
+            }
+            LogUtil.i(AppConfig.TAG, "StartCore-VPN: SOCKS ready on :$socksPort — establishing TUN")
+            // Phase 3 — establish TUN + start hev-tun.  xray is already up, so
+            // hev-tun will be able to forward the very first packet without delay.
+            withContext(Dispatchers.Main) {
+                if (!isRunning) return@withContext  // stopped while switching threads
+                setupVpnService()   // configureVpnService() + runTun2socks()
+                // startService() intentionally omitted: xray is already running.
+            }
+        }
     }
 
     override fun getService(): Service {
@@ -127,6 +191,13 @@ class CoreVpnService : VpnService(), ServiceControl {
     override fun startService() {
         if (!::mInterface.isInitialized) {
             LogUtil.e(AppConfig.TAG, "StartCore-VPN: Interface not initialized")
+            return
+        }
+        // In hev-tun warmup mode xray was started before the TUN was established,
+        // so it may already be running when startService() is called (non-hev-tun path
+        // or an unexpected second call).  Treat an already-running core as success.
+        if (CoreServiceManager.isRunning()) {
+            LogUtil.i(AppConfig.TAG, "StartCore-VPN: core already running, skipping startCoreLoop")
             return
         }
         if (!CoreServiceManager.startCoreLoop(mInterface)) {
