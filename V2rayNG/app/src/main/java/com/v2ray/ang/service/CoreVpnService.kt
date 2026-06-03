@@ -141,6 +141,8 @@ class CoreVpnService : VpnService(), ServiceControl {
      * tries to forward the first packet, xray is already listening — no DNS timeouts.
      */
     private fun startHevTunWithWarmup() {
+        isRunning = true  // mark startup in progress so Phase-2 poll doesn't exit immediately;
+                          // stopAllService() resets this to false if the user cancels
         CoroutineScope(Dispatchers.IO).launch {
             // Phase 1 — start xray in SOCKS-only mode (tunFd=0 for hev-tun anyway).
             val started = CoreServiceManager.startCoreLoop(null)
