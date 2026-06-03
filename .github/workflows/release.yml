@@ -14,6 +14,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
 
       # Restore the SAME debug keystore so APK upgrades over existing installs work.
       # Secret DEBUG_KEYSTORE_BASE64: base64 of ~/.android/debug.keystore from the build machine.
@@ -41,6 +43,42 @@ jobs:
         run: |
           sed -i 's/versionName = "[^"]*"/versionName = "${{ inputs.version }}"/' \
             V2rayNG/app/build.gradle.kts
+
+      # Install NDK needed to compile hev-socks5-tunnel
+      - name: Install NDK
+        run: |
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+            --channel=0 \
+            --install "ndk;29.0.14206865"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> $GITHUB_ENV
+
+      # Build libhev-socks5-tunnel .so files (arm64-v8a only for our release build)
+      - name: Build libhevtun
+        run: |
+          mkdir -p /tmp/jni
+          echo 'include $(call all-subdir-makefiles)' > /tmp/jni/Android.mk
+          ln -s "${{ github.workspace }}/hev-socks5-tunnel" /tmp/jni/hev-socks5-tunnel
+          "$NDK_HOME/ndk-build" \
+            NDK_PROJECT_PATH=/tmp \
+            APP_BUILD_SCRIPT=/tmp/jni/Android.mk \
+            "APP_ABI=arm64-v8a" \
+            APP_PLATFORM=android-24 \
+            NDK_LIBS_OUT=/tmp/hev-libs \
+            NDK_OUT=/tmp/hev-obj \
+            "APP_CFLAGS=-O3 -DPKGNAME=com/v2ray/ang/service" \
+            "APP_LDFLAGS=-Wl,--build-id=none -Wl,--hash-style=gnu"
+          mkdir -p "${{ github.workspace }}/V2rayNG/app/libs/arm64-v8a"
+          cp /tmp/hev-libs/arm64-v8a/libhev-socks5-tunnel.so \
+            "${{ github.workspace }}/V2rayNG/app/libs/arm64-v8a/"
+
+      # Download libv2ray.aar from AndroidLibXrayLite (pinned to v26.6.2 = matches local build)
+      - name: Download libv2ray
+        uses: robinraju/release-downloader@v1.13
+        with:
+          repository: '2dust/AndroidLibXrayLite'
+          tag: 'v26.6.2'
+          fileName: 'libv2ray.aar'
+          out-file-path: V2rayNG/app/libs/
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
