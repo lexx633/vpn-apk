@@ -124,7 +124,7 @@ jobs:
 
       # Deploy to limm.space. Secret DEPLOY_SSH_KEY: private key for deploy@45.95.175.170
       - name: Upload APK to server
-        uses: appleboy/scp-action@v0.1.7
+        uses: appleboy/scp-action@v1.0.0
         with:
           host: 45.95.175.170
           username: deploy
