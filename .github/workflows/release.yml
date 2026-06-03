@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version name (e.g. 2.2.3.1). Must be > installed version for update to trigger.'
+        description: 'Version name (e.g. 2.2.3.2). Must be > installed for update to trigger.'
         required: true
-        default: '2.2.3.1'
+        default: '2.2.3.2'
 
 jobs:
   build:
@@ -15,24 +15,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Restore the SAME debug keystore used in previous builds so upgrade installs work.
-      # Secret DEBUG_KEYSTORE_BASE64: base64-encode ~/.android/debug.keystore and add as repo secret.
+      # Restore the SAME debug keystore so APK upgrades over existing installs work.
+      # Secret DEBUG_KEYSTORE_BASE64: base64 of ~/.android/debug.keystore from the build machine.
       - name: Restore debug keystore
         run: |
           mkdir -p ~/.android
           echo "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" | base64 -d > ~/.android/debug.keystore
 
-      # Secrets: LIMM_VLESS_UUID, LIMM_TOKEN, LIMM_REALITY_SID — add as repo secrets.
+      # Secrets required: LIMM_VLESS_UUID, LIMM_TOKEN, LIMM_REALITY_SID
       - name: Write limm.properties
         run: |
-          cat > V2rayNG/limm.properties <<'PROPS'
-          LIMM_VLESS_UUID=${{ secrets.LIMM_VLESS_UUID }}
-          LIMM_TOKEN=${{ secrets.LIMM_TOKEN }}
-          LIMM_LABEL=mob
-          LIMM_REALITY_SID=${{ secrets.LIMM_REALITY_SID }}
-          PROPS
+          {
+            echo "LIMM_VLESS_UUID=${{ secrets.LIMM_VLESS_UUID }}"
+            echo "LIMM_TOKEN=${{ secrets.LIMM_TOKEN }}"
+            echo "LIMM_LABEL=mob"
+            echo "LIMM_REALITY_SID=${{ secrets.LIMM_REALITY_SID }}"
+          } > V2rayNG/limm.properties
 
-      - name: Set version in build.gradle.kts
+      # Override sdk.dir for Linux (ubuntu-latest has ANDROID_HOME pre-set, but local.properties
+      # from Windows has a Windows path that confuses gradle).
+      - name: Fix local.properties for Linux
+        run: echo "sdk.dir=$ANDROID_HOME" > V2rayNG/local.properties
+
+      - name: Set version
         run: |
           sed -i 's/versionName = "[^"]*"/versionName = "${{ inputs.version }}"/' \
             V2rayNG/app/build.gradle.kts
@@ -54,7 +59,6 @@ jobs:
           echo "path=$APK" >> $GITHUB_OUTPUT
           echo "name=$(basename $APK)" >> $GITHUB_OUTPUT
 
-      # GitHub release — APK прикреплён как asset (нужен для update checker).
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -67,7 +71,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Деплой на limm.space. Секрет DEPLOY_SSH_KEY — private key для deploy@45.95.175.170.
+      # Deploy to limm.space. Secret DEPLOY_SSH_KEY: private key for deploy@45.95.175.170
       - name: Upload APK to server
         uses: appleboy/scp-action@v0.1.7
         with:
