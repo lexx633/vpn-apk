@@ -132,25 +132,20 @@ jobs:
           source: limm-vpn-upload.apk
           target: /tmp/
 
-      - name: Swap APK and update apk-info.json
+      - name: Deploy APK and update apk-info.json
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: 45.95.175.170
           username: deploy
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
-            mv -f /tmp/limm-vpn-upload.apk /var/www/limm/vpn/limm-vpn.apk
-            chmod 644 /var/www/limm/vpn/limm-vpn.apk
-            # Versioned copy with short hash suffix; delete previous versioned files first
+            # Deploy as hash-named file (limm-vpn_XXXX.apk); delete previous versioned files
             SHORTHASH=$(echo "${{ github.sha }}" | cut -c37-40)
             find /var/www/limm/vpn -maxdepth 1 -name 'limm-vpn_*.apk' -delete
-            cp /var/www/limm/vpn/limm-vpn.apk /var/www/limm/vpn/limm-vpn_${SHORTHASH}.apk
-            echo "return 302 /vpn/limm-vpn_${SHORTHASH}.apk;" \
-              > /var/www/limm/vpn/_app_redirect.conf
-            sudo systemctl reload nginx
-            # apk-info.json — единый источник версии. /vpn/releases/latest для
-            # встроенного апдейтера nginx вычисляет из него на лету (api.py
-            # /api/app-release/latest), поэтому отдельный файл больше не пишем —
-            # раньше он расходился с apk-info.json и приложение не видело апдейт (E-018).
+            mv -f /tmp/limm-vpn-upload.apk /var/www/limm/vpn/limm-vpn_${SHORTHASH}.apk
+            chmod 644 /var/www/limm/vpn/limm-vpn_${SHORTHASH}.apk
+            # apk-info.json — единственный источник версии; download-page строит URL
+            # из build[-4:] → limm-vpn_XXXX.apk. _app_redirect.conf не трогаем —
+            # /vpn/app теперь перенаправляет на app.html (не на APK напрямую).
             echo '{"build":"${{ github.sha }}","version":"${{ inputs.version }}"}' \
               > /var/www/limm/vpn/apk-info.json

@@ -5,9 +5,9 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
-import androidx.core.content.FileProvider
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
@@ -18,7 +18,6 @@ import com.v2ray.ang.R
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
@@ -56,7 +55,6 @@ class LimmUpdateWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
                 .readTimeout(10, TimeUnit.SECONDS)
                 .build()
 
-            // Fetch latest release info
             val resp = client.newCall(
                 Request.Builder().url("${LimmConfig.collectorUrl}/vpn/apk/latest")
                     .header("Cache-Control", "no-cache").build()
@@ -65,27 +63,18 @@ class LimmUpdateWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
                 r.body?.string() ?: return
             }
 
-            val tagName = JSONObject(resp).optString("tag_name", "").removePrefix("v")
+            val json = JSONObject(resp)
+            val tagName = json.optString("tag_name", "").removePrefix("v")
             if (tagName.isEmpty()) return
 
-            // Compare with installed version
             if (compareVersions(tagName, BuildConfig.VERSION_NAME) <= 0) return
 
-            // Newer version found — download APK
-            val apkUrl = "${LimmConfig.collectorUrl}/vpn/limm-vpn.apk"
-            val apkFile = File(ctx.cacheDir, "limm-vpn-update.apk")
-
-            client.newCall(Request.Builder().url(apkUrl).build()).execute().use { r ->
-                if (!r.isSuccessful) return
-                r.body?.byteStream()?.use { input ->
-                    apkFile.outputStream().use { output -> input.copyTo(output) }
-                }
-            }
-
-            showInstallNotification(ctx, apkFile, tagName)
+            // Newer version found — open download page in browser (no silent APK install)
+            val htmlUrl = json.optString("html_url", "${LimmConfig.collectorUrl}/vpn/app")
+            showUpdateNotification(ctx, htmlUrl, tagName)
         }
 
-        private fun showInstallNotification(ctx: Context, apkFile: File, version: String) {
+        private fun showUpdateNotification(ctx: Context, htmlUrl: String, version: String) {
             val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -95,20 +84,18 @@ class LimmUpdateWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
                 )
             }
 
-            val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.cache", apkFile)
-            val installIntent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package-archive")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(htmlUrl)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             val pi = PendingIntent.getActivity(
-                ctx, 0, installIntent,
+                ctx, 0, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
             val notif = NotificationCompat.Builder(ctx, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_stat_name)
-                .setContentTitle("limm VPN $version готов")
-                .setContentText("Нажми для установки обновления")
+                .setContentTitle("limm VPN $version доступен")
+                .setContentText("Нажми чтобы скачать обновление")
                 .setContentIntent(pi)
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
