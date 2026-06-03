@@ -135,29 +135,50 @@ class CoreVpnService : VpnService(), ServiceControl {
     }
 
     /**
-     * Cold-start fix for hev-tun mode.
-     * Starts xray first (SOCKS only, no TUN fd), waits until the SOCKS port responds,
-     * then establishes the VPN TUN interface and starts hev-tun.  By the time hev-tun
-     * tries to forward the first packet, xray is already listening — no DNS timeouts.
+     * Cold-start fix for hev-tun mode. Order: TUN first, then xray, then hev-tun.
+     *
+     * TUN first: builder.establish() triggers Android's VPN routing immediately so every
+     * outbound packet from other apps lands in the TUN fd buffer instead of going to the
+     * ISP directly. While xray starts (Phase 2), packets accumulate in the kernel buffer.
+     * When hev-tun starts (Phase 4) xray is already listening and drains the buffer without
+     * dropped packets or connection errors.
+     *
+     * Old order (xray first) had a ~700 ms-2 s window where traffic bypassed the VPN entirely
+     * -- ISP-blocked foreign sites failed and the browser did not auto-retry those connections.
      */
     private fun startHevTunWithWarmup() {
-        isRunning = true  // mark startup in progress so Phase-2 poll doesn't exit immediately;
-                          // stopAllService() resets this to false if the user cancels
+        isRunning = true  // mark startup in progress; stopAllService() resets to false if cancelled
         CoroutineScope(Dispatchers.IO).launch {
-            // Phase 1 — start xray in SOCKS-only mode (tunFd=0 for hev-tun anyway).
+            // Phase 1 -- establish TUN immediately so the VPN key icon appears and Android
+            // routes all traffic into the TUN fd buffer.
+            var tunReady = false
+            withContext(Dispatchers.Main) {
+                if (!isRunning) return@withContext
+                val prepare = prepare(this@CoreVpnService)
+                if (prepare != null) {
+                    LogUtil.e(AppConfig.TAG, "StartCore-VPN: VPN permission not granted")
+                    stopSelf()
+                    return@withContext
+                }
+                if (configureVpnService() == true) tunReady = true
+            }
+            if (!tunReady || !isRunning) return@launch
+
+            // Phase 2 -- start xray in SOCKS-only mode (hev-tun uses tunFd=0).
+            // Packets buffer in the TUN fd while xray starts.
             val started = CoreServiceManager.startCoreLoop(null)
-            if (!started) {
+            if (!started && !CoreServiceManager.isRunning()) {
                 LogUtil.e(AppConfig.TAG, "StartCore-VPN: warmup xray start failed")
                 withContext(Dispatchers.Main) { stopAllService() }
                 return@launch
             }
-            // Phase 2 — wait for SOCKS to be reachable (max 10 s).
+
+            // Phase 3 -- wait for SOCKS port to accept connections (max 10 s).
             val socksPort = SettingsManager.getSocksPort()
             val deadline = System.currentTimeMillis() + 10_000L
             var socksReady = false
             while (System.currentTimeMillis() < deadline) {
                 if (!isRunning) {
-                    // Service was stopped while we were waiting (user cancelled).
                     CoreServiceManager.stopCoreLoop()
                     return@launch
                 }
@@ -175,13 +196,14 @@ class CoreVpnService : VpnService(), ServiceControl {
                 withContext(Dispatchers.Main) { stopAllService() }
                 return@launch
             }
-            LogUtil.i(AppConfig.TAG, "StartCore-VPN: SOCKS ready on :$socksPort — establishing TUN")
-            // Phase 3 — establish TUN + start hev-tun.  xray is already up, so
-            // hev-tun will be able to forward the very first packet without delay.
+            LogUtil.i(AppConfig.TAG, "StartCore-VPN: SOCKS ready on :$socksPort -- starting hev-tun")
+
+            // Phase 4 -- start hev-tun. xray is up; hev-tun immediately drains the
+            // packets that accumulated in the TUN fd during Phases 2-3.
+            // startService() intentionally omitted: xray is already running.
             withContext(Dispatchers.Main) {
-                if (!isRunning) return@withContext  // stopped while switching threads
-                setupVpnService()   // configureVpnService() + runTun2socks()
-                // startService() intentionally omitted: xray is already running.
+                if (!isRunning) return@withContext
+                runTun2socks()
             }
         }
     }
