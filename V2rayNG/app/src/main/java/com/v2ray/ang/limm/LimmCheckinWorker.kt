@@ -54,6 +54,8 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             val now = OneTimeWorkRequestBuilder<LimmCheckinWorker>().build()
             WorkManager.getInstance(ctx)
                 .enqueueUniqueWork("${UNIQUE}_now", ExistingWorkPolicy.REPLACE, now)
+            // Schedule update checker (every 6h — downloads APK and notifies if newer version)
+            LimmUpdateWorker.schedule(ctx)
         }
 
         /**
