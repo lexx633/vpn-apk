@@ -203,10 +203,10 @@ object LimmLogReporter {
         }
     }
 
-    private fun readLogcat(limit: Int = 400): List<String> = try {
+    private fun readLogcat(limit: Int = 2000): List<String> = try {
         val cmd = arrayOf(
             "logcat", "-d", "-v", "time", "-t", limit.toString(),
-            "-s", "GoLog,$ANG_PACKAGE,AndroidRuntime,System.err,tun2socks"
+            "-s", "GoLog,LimmDiag,$ANG_PACKAGE,AndroidRuntime,System.err,tun2socks"
         )
         Runtime.getRuntime().exec(cmd).inputStream.bufferedReader().use { it.readLines() }
     } catch (e: Exception) {
