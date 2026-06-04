@@ -35,8 +35,8 @@ android {
         applicationId = "space.limm.vpn"
         minSdk = 24
         targetSdk = 37
-        versionCode = 734
-        versionName = "2.2.3.10"
+        versionCode = 735
+        versionName = "2.2.3.11"
         multiDexEnabled = true
 
         // limm VPN config — non-secret REALITY params baked, secrets from limm.properties
@@ -76,6 +76,19 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("limmRelease") {
+            val ksPath = limm("LIMM_KEYSTORE_PATH")
+            val ksFile = if (ksPath.isNotEmpty()) rootProject.file(ksPath) else null
+            if (ksFile != null && ksFile.exists()) {
+                storeFile = ksFile
+                storePassword = limm("LIMM_KEYSTORE_PASSWORD")
+                keyAlias = limm("LIMM_KEY_ALIAS")
+                keyPassword = limm("LIMM_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -83,6 +96,10 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            val limmReleaseCfg = signingConfigs.findByName("limmRelease")
+            if (limmReleaseCfg?.storeFile != null) {
+                signingConfig = limmReleaseCfg
+            }
         }
     }
 

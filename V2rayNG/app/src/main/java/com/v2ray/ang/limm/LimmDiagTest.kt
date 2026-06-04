@@ -187,6 +187,17 @@ object LimmDiagTest {
     suspend fun run(ctx: Context, onProgress: (String) -> Unit): List<RunResult> {
         val results = mutableListOf<RunResult>()
 
+        // ── Pre-check: VPN permission must already be granted ─────────────────
+        // prepare() returns non-null Intent when permission dialog is needed.
+        // A Service cannot show that dialog → VPN start will silently fail.
+        val permIntent = android.net.VpnService.prepare(ctx)
+        if (permIntent != null) {
+            val msg = "❌  Нет разрешения VPN.\n\nСначала подключитесь вручную кнопкой «Подключить» (Android покажет диалог разрешения), затем запустите тест снова."
+            onProgress(msg)
+            Log.e(TAG, "DIAG ABORT: VPN permission not granted — run once manually first")
+            return results
+        }
+
         // ── 0. Stop VPN if running ────────────────────────────────────────────
         if (CoreServiceManager.isRunning() || vpnTransportUp(ctx)) {
             onProgress("⏹  Останавливаю VPN…")
@@ -196,18 +207,22 @@ object LimmDiagTest {
         Log.i(TAG, "=== LIMM DIAG TEST START ===")
 
         // ── 1. Check-in (VPN off) ─────────────────────────────────────────────
-        onProgress("📡  Чек-ин 1 (VPN выкл)…")
+        onProgress("📡  Чек-ин (VPN выкл)…")
         val (ok1, msg1) = LimmCheckinWorker.sendNow(ctx)
         onProgress(if (ok1) "    ✓ $msg1" else "    ✗ $msg1")
+        Log.i(TAG, "checkin-off: ok=$ok1 $msg1")
 
         // ── 2. Run 1: first cold start ─────────────────────────────────────────
         onProgress("\n🔌  Соединение 1 — запускаю VPN…")
+        Log.i(TAG, "--- Соединение 1 (холодный старт) ---")
         val t01 = System.currentTimeMillis()
         withContext(Dispatchers.Main) { CoreServiceManager.startVService(ctx) }
         delay(50)  // let the intent dispatch
         val phases1 = measureRun(ctx, t01)
         phases1.forEach { p ->
-            onProgress("    ${if (p.ok) "✓" else "✗"}  ${p.name}: ${if (p.fromStartMs >= 0) "+${p.fromStartMs}ms" else "—"}   ${p.note}")
+            val line = "    ${if (p.ok) "✓" else "✗"}  ${p.name}: ${if (p.fromStartMs >= 0) "+${p.fromStartMs}ms" else "—"}   ${p.note}"
+            onProgress(line)
+            Log.i(TAG, "  [${if (p.ok) "OK" else "FAIL"}] ${p.name}: +${p.fromStartMs}ms  ${p.note}")
         }
         results += RunResult("Соединение 1 (холодный старт)", phases1)
 
@@ -218,35 +233,26 @@ object LimmDiagTest {
 
         // ── 4. Run 2: second cold start ────────────────────────────────────────
         onProgress("\n🔌  Соединение 2 — запускаю VPN…")
+        Log.i(TAG, "--- Соединение 2 (повторный старт) ---")
         val t02 = System.currentTimeMillis()
         withContext(Dispatchers.Main) { CoreServiceManager.startVService(ctx) }
         delay(50)
         val phases2 = measureRun(ctx, t02)
         phases2.forEach { p ->
-            onProgress("    ${if (p.ok) "✓" else "✗"}  ${p.name}: ${if (p.fromStartMs >= 0) "+${p.fromStartMs}ms" else "—"}   ${p.note}")
+            val line = "    ${if (p.ok) "✓" else "✗"}  ${p.name}: ${if (p.fromStartMs >= 0) "+${p.fromStartMs}ms" else "—"}   ${p.note}"
+            onProgress(line)
+            Log.i(TAG, "  [${if (p.ok) "OK" else "FAIL"}] ${p.name}: +${p.fromStartMs}ms  ${p.note}")
         }
         results += RunResult("Соединение 2 (повторный старт)", phases2)
 
-        // ── 5. Check-in (VPN on) ──────────────────────────────────────────────
-        onProgress("\n📡  Чек-ин 2 (VPN вкл)…")
-        val (ok2, msg2) = LimmCheckinWorker.sendNow(ctx)
-        onProgress(if (ok2) "    ✓ $msg2" else "    ✗ $msg2")
-
-        // ── 6. Stop VPN ────────────────────────────────────────────────────────
+        // ── 5. Stop VPN ────────────────────────────────────────────────────────
         onProgress("\n⏹  Останавливаю VPN…")
         withContext(Dispatchers.Main) { CoreServiceManager.stopVService(ctx) }
         delay(1500)
 
-        // Log summary
-        results.forEach { run ->
-            Log.i(TAG, "--- ${run.label} ---")
-            run.phases.forEach { p ->
-                Log.i(TAG, "  [${if (p.ok) "OK" else "FAIL"}] ${p.name}: +${p.fromStartMs}ms  ${p.note}")
-            }
-        }
         Log.i(TAG, "=== LIMM DIAG TEST END ===")
 
-        // ── 7. Upload applog ────────────────────────────────────────────────────
+        // ── 6. Upload applog ────────────────────────────────────────────────────
         onProgress("\n📤  Отправляю лог на сервер…")
         val (logOk, logMsg) = LimmLogReporter.send(ctx)
         onProgress(if (logOk) "    ✓ Лог отправлен" else "    ✗ $logMsg")
