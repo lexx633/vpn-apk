@@ -76,7 +76,7 @@ class LimmUpdateWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
                 ?.takeIf { it.isNotEmpty() }
                 ?: return
 
-            val apkFile = File(ctx.cacheDir, "limm-vpn-update.apk")
+            val apkFile = File(ctx.cacheDir, LimmSelfUpdater.APK_CACHE_NAME)
             client.newCall(Request.Builder().url(apkUrl).build()).execute().use { r ->
                 if (!r.isSuccessful) return
                 r.body?.byteStream()?.use { input ->

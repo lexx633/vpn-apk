@@ -297,6 +297,15 @@
                 android:resource="@xml/cache_paths" />
         </provider>
 
+        <!-- Auto-relaunch after in-app self-update -->
+        <receiver
+            android:name=".limm.LimmPackageReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
     </application>
 
 </manifest>
