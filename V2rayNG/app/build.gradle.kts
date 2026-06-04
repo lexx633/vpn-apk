@@ -14,10 +14,10 @@ val limmProps = Properties().apply {
 fun limm(key: String, default: String = ""): String = limmProps.getProperty(key) ?: default
 
 // CI injects full github SHA via limm.properties so app hash matches the footer on limm.space/stat.
-// Locally falls back to short git SHA.
+// Locally uses full git SHA (40 chars) so last-4 display matches apk-info.json filename.
 val limmBuildHash: String = limm("LIMM_BUILD_SHA").ifEmpty {
     try {
-        val p = ProcessBuilder("git", "rev-parse", "--short", "HEAD")
+        val p = ProcessBuilder("git", "rev-parse", "HEAD")
             .directory(rootProject.rootDir)
             .redirectErrorStream(true)
             .start()
@@ -35,8 +35,8 @@ android {
         applicationId = "space.limm.vpn"
         minSdk = 24
         targetSdk = 37
-        versionCode = 737
-        versionName = "2.2.3.13"
+        versionCode = 738
+        versionName = "2.2.3.14"
         multiDexEnabled = true
 
         // limm VPN config — non-secret REALITY params baked, secrets from limm.properties
