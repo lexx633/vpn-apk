@@ -111,6 +111,16 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
         checkAndRequestPermission(PermissionType.POST_NOTIFICATIONS) {
         }
+
+        // Auto-connect on start if enabled in settings
+        if (MmkvManager.decodeSettingsBool(AppConfig.PREF_AUTO_CONNECT_ON_START, false)) {
+            lifecycleScope.launch {
+                delay(500) // wait for initial isRunning state to be received
+                if (mainViewModel.isRunning.value != true) {
+                    handleFabAction()
+                }
+            }
+        }
     }
 
     private fun setupViewModel() {
@@ -122,9 +132,11 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             // connected state from the app instead of stale pre-connect data.
             if (isRunning == true && !limmCheckinFired) {
                 limmCheckinFired = true
-                lifecycleScope.launch(Dispatchers.IO) {
-                    delay(12000)
-                    runCatching { com.v2ray.ang.limm.LimmCheckinWorker.sendNow(applicationContext) }
+                if (MmkvManager.decodeSettingsBool(AppConfig.PREF_LIMM_DEBUG, false)) {
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        delay(12000)
+                        runCatching { com.v2ray.ang.limm.LimmCheckinWorker.sendNow(applicationContext) }
+                    }
                 }
             } else if (isRunning != true) {
                 limmCheckinFired = false
@@ -223,6 +235,8 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
     override fun onResume() {
         super.onResume()
+        // Refresh menu visibility when returning from Settings (debug toggle may have changed)
+        invalidateOptionsMenu()
     }
 
     override fun onPause() {
@@ -231,6 +245,12 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.menu_main, menu)
+
+        // Show limm debug items only when debug mode is enabled in settings
+        val debugMode = MmkvManager.decodeSettingsBool(AppConfig.PREF_LIMM_DEBUG, false)
+        menu.findItem(R.id.run_limm_diag)?.isVisible = debugMode
+        menu.findItem(R.id.send_checkin_to_limm)?.isVisible = debugMode
+        menu.findItem(R.id.send_log_to_limm)?.isVisible = debugMode
 
         val searchItem = menu.findItem(R.id.search_view)
         if (searchItem != null) {

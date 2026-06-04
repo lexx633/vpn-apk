@@ -274,6 +274,19 @@
     </PreferenceCategory>
 
 
+    <PreferenceCategory android:title="Limm VPN">
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="pref_auto_connect_on_start"
+            android:summary="Подключаться к VPN автоматически при запуске приложения"
+            android:title="Автоподключение при запуске" />
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="pref_limm_debug"
+            android:summary="Показывает пункты диагностики в меню и отправляет чек-ины каждые 15 мин"
+            android:title="Режим отладки (debug)" />
+    </PreferenceCategory>
+
     <PreferenceCategory android:title="@string/title_advanced">
 
         <CheckBoxPreference
