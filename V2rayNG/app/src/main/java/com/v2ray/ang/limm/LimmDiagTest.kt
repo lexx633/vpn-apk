@@ -41,7 +41,7 @@ object LimmDiagTest {
     private const val TAG = "LimmDiag"
     private const val POLL_INTERVAL_MS = 80L
     private const val RUN_TIMEOUT_MS = 20_000L   // 20 s max per run
-    private const val COLD_START_CHECK_MS = 20_000L  // browser re-check at +20s mark
+    private const val COLD_START_CHECK_MS = 32_000L  // browser re-check at +32s mark
 
     data class Phase(val name: String, val ok: Boolean, val fromStartMs: Long, val note: String = "")
     data class RunResult(val label: String, val phases: List<Phase>)
@@ -188,7 +188,7 @@ object LimmDiagTest {
             csOk,
             System.currentTimeMillis() - runT0,
             if (csOk) "код=$csCode, ${csReqMs}ms — cold-start OK ✓"
-            else "FAIL код=$csCode ${csReqMs}ms — cold-start баг!"
+            else "FAIL код=$csCode ${csReqMs}ms — cold-start BUG!"
         )
 
         return phases

@@ -8,18 +8,14 @@ import com.v2ray.ang.ui.MainActivity
 
 /**
  * Receives ACTION_MY_PACKAGE_REPLACED when our own APK is updated.
- * Since the broadcast is delivered to the NEW version of the app, we simply
- * relaunch MainActivity so the user lands in the updated app without
- * having to tap "Open" manually.
+ * Intentionally does NOT auto-relaunch: installer shows its own "Open / Done" dialog,
+ * and forcing a launch on top of it prevents the user from choosing.
  */
 class LimmPackageReceiver : BroadcastReceiver() {
 
     override fun onReceive(ctx: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
-        Log.i("LimmUpdate", "Package replaced — relaunching app")
-        val launch = Intent(ctx, MainActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        }
-        ctx.startActivity(launch)
+        Log.i("LimmUpdate", "Package replaced — waiting for user to open app manually")
+        // No auto-relaunch: let the system installer's "Open" button do it.
     }
 }
