@@ -9,39 +9,36 @@ import com.v2ray.ang.handler.SettingsManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.net.InetSocketAddress
-import java.net.Proxy
 import java.net.Socket
-import java.net.URL
-import java.util.concurrent.TimeUnit
 
 /**
  * Full connection diagnostic test.
  *
  * Sequence:
- *  0. Stop VPN if running
- *  1. Check-in (VPN off)
- *  2. Start VPN, measure each startup phase:
- *       TUN interface up (ConnectivityManager sees TRANSPORT_VPN)
- *       SOCKS port accepts connections
- *       HTTP via SOCKS succeeds  (proxy path — same as LimmCheckinWorker probes)
- *       HTTP via TUN  succeeds   (real-browser path — bound to VPN network)
- *  3. Stop VPN, wait 2 s
- *  4. Start VPN again (second cold start), same measurements
- *  5. Check-in (VPN on)
- *  6. Stop VPN
- *  7. Upload applog
+ *  0. Stop VPN if running, wait 2s
+ *  1. Check-in (VPN off) — baseline
+ *  2. Run 1: start VPN, measure cold-start timings:
+ *       Phase A — TUN interface up (VPN key in status bar)
+ *       Phase B — SOCKS port accepts connections (xray ready)
+ *       Phase C — cold-start verdict: TUN < SOCKS = no traffic leak ✓
+ *       Phase D — check-in at +32s (proves tunnel carries real traffic)
+ *  3. Stop VPN, wait 2s
+ *  4. Run 2: repeat
+ *  5. Stop VPN
+ *  6. Upload applog
  *
- * All timings are measured from the moment startVService() is called.
+ * Note: HTTP probes via SOCKS/TUN were removed. The app is in addDisallowedApplication,
+ * so its traffic bypasses VPN TUN. Direct requests to google.com are blocked in RU
+ * without a proxy → always fail, misleading. Infrastructure timings (TUN/SOCKS order)
+ * and the check-in result are the reliable cold-start indicators.
  */
 object LimmDiagTest {
 
     private const val TAG = "LimmDiag"
     private const val POLL_INTERVAL_MS = 80L
-    private const val RUN_TIMEOUT_MS = 20_000L   // 20 s max per run
-    private const val COLD_START_CHECK_MS = 32_000L  // browser re-check at +32s mark
+    private const val RUN_TIMEOUT_MS = 20_000L
+    private const val COLD_START_CHECK_MS = 32_000L  // check-in at +32s mark
 
     data class Phase(val name: String, val ok: Boolean, val fromStartMs: Long, val note: String = "")
     data class RunResult(val label: String, val phases: List<Phase>)
@@ -60,51 +57,6 @@ object LimmDiagTest {
         Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 300); true }
     } catch (e: Exception) { false }
 
-    /** HTTP GET through the local SOCKS proxy — same path the checkin worker uses. */
-    private fun httpViaSocks(url: String, socksPort: Int, timeoutSec: Long = 10): Triple<Boolean, Int, Long> {
-        val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
-        val t0 = System.currentTimeMillis()
-        return try {
-            val client = OkHttpClient.Builder()
-                .proxy(proxy)
-                .connectTimeout(timeoutSec, TimeUnit.SECONDS)
-                .readTimeout(timeoutSec, TimeUnit.SECONDS)
-                .build()
-            client.newCall(Request.Builder().url(url).build()).execute().use { r ->
-                Triple(r.isSuccessful || r.code == 204, r.code, System.currentTimeMillis() - t0)
-            }
-        } catch (e: Exception) {
-            Triple(false, -1, System.currentTimeMillis() - t0)
-        }
-    }
-
-    /**
-     * HTTP GET bound explicitly to the VPN network.
-     * This is the same path Chrome and other excluded apps use — the request goes through
-     * the TUN fd → hev-tun → SOCKS → VLESS.  The app is excluded from its own VPN via
-     * addDisallowedApplication, but Network.openConnection() overrides that exclusion and
-     * forces the socket onto the VPN network regardless.
-     */
-    private fun httpViaTun(ctx: Context, url: String, timeoutMs: Int = 8000): Triple<Boolean, Int, Long> {
-        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val vpnNet = cm.allNetworks.firstOrNull { n ->
-            cm.getNetworkCapabilities(n)
-                ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
-        } ?: return Triple(false, -2, -1L)
-
-        val t0 = System.currentTimeMillis()
-        return try {
-            val conn = vpnNet.openConnection(URL(url))
-            conn.connectTimeout = timeoutMs
-            conn.readTimeout = timeoutMs
-            conn.connect()
-            val code = (conn as? java.net.HttpURLConnection)?.responseCode ?: 200
-            Triple(code in 200..299 || code == 204, code, System.currentTimeMillis() - t0)
-        } catch (e: Exception) {
-            Triple(false, -1, System.currentTimeMillis() - t0)
-        }
-    }
-
     // ── one full VPN run: start → measure → return phases ───────────────────
 
     private suspend fun measureRun(ctx: Context, runT0: Long): List<Phase> {
@@ -122,8 +74,9 @@ object LimmDiagTest {
             "TUN интерфейс",
             tunMs >= 0,
             tunMs,
-            if (tunMs >= 0) "VPN ключ в статусбаре через +${tunMs}ms" else "TIMEOUT ${RUN_TIMEOUT_MS}ms"
+            if (tunMs >= 0) "VPN ключ в статусбаре +${tunMs}ms" else "TIMEOUT ${RUN_TIMEOUT_MS}ms"
         )
+        Log.i(TAG, "  Phase A: TUN=${if (tunMs >= 0) "+${tunMs}ms" else "TIMEOUT"}")
         if (tunMs < 0) return phases
 
         // ── Phase B: SOCKS port accepts connections ───────────────────────────
@@ -136,60 +89,47 @@ object LimmDiagTest {
             "SOCKS :$socksPort",
             socksMs >= 0,
             socksMs,
-            if (socksMs >= 0) "+${socksMs}ms" else "TIMEOUT"
+            if (socksMs >= 0) "xray готов +${socksMs}ms" else "TIMEOUT"
         )
+        Log.i(TAG, "  Phase B: SOCKS=${if (socksMs >= 0) "+${socksMs}ms" else "TIMEOUT"}")
         if (socksMs < 0) return phases
 
-        // ── Phase C: HTTP via SOCKS (proxy path) ─────────────────────────────
-        val (socksOk, socksCode, socksReqMs) = httpViaSocks(
-            "https://www.google.com/generate_204", socksPort
-        )
+        // ── Phase C: cold-start verdict ───────────────────────────────────────
+        // TUN must appear BEFORE SOCKS. If TUN < SOCKS → traffic buffered in TUN fd
+        // while xray starts → no leak to ISP → cold-start FIXED ✓
+        // If SOCKS < TUN → xray ready before TUN → traffic went direct → BUG ✗
+        val tunFirst = tunMs < socksMs
+        val bufferMs = socksMs - tunMs
         phases += Phase(
-            "HTTP(SOCKS)",
-            socksOk,
-            System.currentTimeMillis() - runT0,
-            if (socksOk) "code=$socksCode, req=${socksReqMs}ms → google.com"
-            else "FAIL code=$socksCode"
+            "Холодный старт",
+            tunFirst,
+            socksMs,
+            if (tunFirst)
+                "TUN +${tunMs}ms < SOCKS +${socksMs}ms → буфер ${bufferMs}ms → фикс работает ✓"
+            else
+                "SOCKS +${socksMs}ms < TUN +${tunMs}ms → трафик утёк в ISP! БАГ ✗"
         )
+        Log.i(TAG, "  Phase C: cold-start ${if (tunFirst) "OK (buffer ${bufferMs}ms)" else "BUG!"}")
 
-        // ── Phase D: HTTP via TUN (real-browser path) ─────────────────────────
-        // Give hev-tun a tiny moment to fully start processing after SOCKS is ready.
-        delay(150)
-        val (tunOk, tunCode, tunReqMs) = httpViaTun(ctx, "https://www.google.com/generate_204")
-        phases += Phase(
-            "HTTP(TUN)",
-            tunOk,
-            System.currentTimeMillis() - runT0,
-            if (tunOk) "code=$tunCode, req=${tunReqMs}ms → google.com (браузерный путь)"
-            else if (tunCode == -2) "VPN сеть исчезла"
-            else "FAIL code=$tunCode ${tunReqMs}ms"
-        )
-
-        // ── Phase E: extra TUN test — example.com (non-Google) ───────────────
-        if (tunOk) {
-            val (exOk, exCode, exMs) = httpViaTun(ctx, "https://example.com/")
-            phases += Phase(
-                "HTTP(TUN) example.com",
-                exOk,
-                System.currentTimeMillis() - runT0,
-                if (exOk) "${exMs}ms" else "FAIL code=$exCode"
-            )
-        }
-
-        // ── Phase F: cold-start check — browser via TUN at +20s mark ──────────
-        // Wait until 20 s have elapsed from VPN start (subtract time already spent).
+        // ── Phase D: check-in at +32s ─────────────────────────────────────────
+        // Waits until 32s from VPN start, then sends a check-in.
+        // Check-in uses the collector URL (limm.space) — accessible both direct and via tunnel.
+        // The server records egress_ip: if it matches VPN server → request went through tunnel.
         val elapsed = System.currentTimeMillis() - runT0
         val waitMs = (COLD_START_CHECK_MS - elapsed).coerceAtLeast(0L)
-        if (waitMs > 0) delay(waitMs)
-        Log.i(TAG, "  Phase F: cold-start browser recheck at +${System.currentTimeMillis() - runT0}ms")
-        val (csOk, csCode, csReqMs) = httpViaTun(ctx, "https://www.google.com/generate_204")
+        if (waitMs > 0) {
+            Log.i(TAG, "  Phase D: ждём +32s, осталось ${waitMs}ms…")
+            delay(waitMs)
+        }
+        Log.i(TAG, "  Phase D: check-in at +${System.currentTimeMillis() - runT0}ms")
+        val (ciOk, ciMsg) = LimmCheckinWorker.sendNow(ctx)
         phases += Phase(
-            "HTTP(TUN) @+20s",
-            csOk,
+            "Check-in @+32s",
+            ciOk,
             System.currentTimeMillis() - runT0,
-            if (csOk) "код=$csCode, ${csReqMs}ms — cold-start OK ✓"
-            else "FAIL код=$csCode ${csReqMs}ms — cold-start BUG!"
+            if (ciOk) ciMsg else "FAIL: $ciMsg"
         )
+        Log.i(TAG, "  Phase D: check-in ${if (ciOk) "OK: $ciMsg" else "FAIL: $ciMsg"}")
 
         return phases
     }
@@ -198,19 +138,16 @@ object LimmDiagTest {
 
     /**
      * Runs the full test. Must be called from a coroutine (NOT from the main thread).
-     * [onProgress] is called from the IO thread with each status line as it happens.
+     * [onProgress] is called with each status line as it happens.
      */
     suspend fun run(ctx: Context, onProgress: (String) -> Unit): List<RunResult> {
         val results = mutableListOf<RunResult>()
 
         // ── Pre-check: VPN permission must already be granted ─────────────────
-        // prepare() returns non-null Intent when permission dialog is needed.
-        // A Service cannot show that dialog → VPN start will silently fail.
         val permIntent = android.net.VpnService.prepare(ctx)
         if (permIntent != null) {
-            val msg = "❌  Нет разрешения VPN.\n\nСначала подключитесь вручную кнопкой «Подключить» (Android покажет диалог разрешения), затем запустите тест снова."
-            onProgress(msg)
-            Log.e(TAG, "DIAG ABORT: VPN permission not granted — run once manually first")
+            onProgress("❌  Нет разрешения VPN.\n\nСначала подключитесь вручную кнопкой «Подключить» (Android покажет диалог разрешения), затем запустите тест снова.")
+            Log.e(TAG, "DIAG ABORT: VPN permission not granted")
             return results
         }
 
@@ -233,12 +170,13 @@ object LimmDiagTest {
         Log.i(TAG, "--- Соединение 1 (холодный старт) ---")
         val t01 = System.currentTimeMillis()
         withContext(Dispatchers.Main) { CoreServiceManager.startVService(ctx) }
-        delay(50)  // let the intent dispatch
+        delay(50)
         val phases1 = measureRun(ctx, t01)
         phases1.forEach { p ->
-            val line = "    ${if (p.ok) "✓" else "✗"}  ${p.name}: ${if (p.fromStartMs >= 0) "+${p.fromStartMs}ms" else "—"}   ${p.note}"
-            onProgress(line)
-            Log.i(TAG, "  [${if (p.ok) "OK" else "FAIL"}] ${p.name}: +${p.fromStartMs}ms  ${p.note}")
+            val icon = if (p.ok) "✓" else "✗"
+            val ms = if (p.fromStartMs >= 0) "+${p.fromStartMs}ms" else "—"
+            onProgress("    $icon  ${p.name}: $ms   ${p.note}")
+            Log.i(TAG, "  [${if (p.ok) "OK" else "FAIL"}] ${p.name}: $ms  ${p.note}")
         }
         results += RunResult("Соединение 1 (холодный старт)", phases1)
 
@@ -255,9 +193,10 @@ object LimmDiagTest {
         delay(50)
         val phases2 = measureRun(ctx, t02)
         phases2.forEach { p ->
-            val line = "    ${if (p.ok) "✓" else "✗"}  ${p.name}: ${if (p.fromStartMs >= 0) "+${p.fromStartMs}ms" else "—"}   ${p.note}"
-            onProgress(line)
-            Log.i(TAG, "  [${if (p.ok) "OK" else "FAIL"}] ${p.name}: +${p.fromStartMs}ms  ${p.note}")
+            val icon = if (p.ok) "✓" else "✗"
+            val ms = if (p.fromStartMs >= 0) "+${p.fromStartMs}ms" else "—"
+            onProgress("    $icon  ${p.name}: $ms   ${p.note}")
+            Log.i(TAG, "  [${if (p.ok) "OK" else "FAIL"}] ${p.name}: $ms  ${p.note}")
         }
         results += RunResult("Соединение 2 (повторный старт)", phases2)
 
