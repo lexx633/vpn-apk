@@ -47,6 +47,10 @@
         android:title="@string/title_sort_by_test_results"
         app:showAsAction="never" />
     <item
+        android:id="@+id/run_limm_diag"
+        android:title="Полный диагностический тест"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/send_checkin_to_limm"
         android:title="Отправить чек-ин на сервер"
         app:showAsAction="never" />

@@ -2,12 +2,16 @@ package com.v2ray.ang.ui
 
 import android.content.Intent
 import android.content.res.ColorStateList
+import android.graphics.Typeface
 import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.Menu
 import android.view.MenuItem
+import android.view.View
+import android.widget.ScrollView
+import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -301,6 +305,48 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
         R.id.sub_update -> {
             importConfigViaSub()
+            true
+        }
+
+        R.id.run_limm_diag -> {
+            val dp = resources.displayMetrics.density
+            val tv = TextView(this).apply {
+                text = "Подготовка…"
+                textSize = 12f
+                typeface = Typeface.MONOSPACE
+                setPadding((12 * dp).toInt(), (12 * dp).toInt(), (12 * dp).toInt(), (12 * dp).toInt())
+                setTextIsSelectable(true)
+            }
+            val scroll = ScrollView(this).apply {
+                addView(tv)
+                setPadding((4 * dp).toInt(), 0, (4 * dp).toInt(), 0)
+            }
+            val dialog = AlertDialog.Builder(this)
+                .setTitle("Диагностика подключения")
+                .setView(scroll)
+                .setNegativeButton("Закрыть") { d, _ -> d.dismiss() }
+                .setCancelable(false)
+                .show()
+
+            val sb = StringBuilder()
+            fun appendLine(line: String) {
+                sb.appendLine(line)
+                runOnUiThread {
+                    tv.text = sb.toString()
+                    scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+                }
+            }
+
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    com.v2ray.ang.limm.LimmDiagTest.run(applicationContext) { line ->
+                        appendLine(line)
+                    }
+                    appendLine("\n✅ Тест завершён.")
+                } catch (e: Exception) {
+                    appendLine("\n❌ Ошибка: ${e.message}")
+                }
+            }
             true
         }
 
