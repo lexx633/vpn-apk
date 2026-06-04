@@ -393,6 +393,7 @@ object CoreConfigManager {
     private fun postProcessForSpeedtest(v2rayConfig: V2rayConfig) {
         v2rayConfig.log.loglevel = MmkvManager.decodeSettingsString(AppConfig.PREF_LOGLEVEL) ?: "warning"
         v2rayConfig.inbounds.clear()
+        v2rayConfig.routing.domainStrategy = "AsIs"
         v2rayConfig.routing.rules.clear()
         v2rayConfig.dns = null
         v2rayConfig.fakedns = null
