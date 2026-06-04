@@ -23,15 +23,15 @@
                 android:layout_width="@dimen/image_size_dp24"
                 android:layout_height="@dimen/image_size_dp24"
                 android:importantForAccessibility="no"
-                app:srcCompat="@drawable/ic_source_code_24dp" />
+                app:srcCompat="@drawable/ic_cloud_download_24dp" />
 
             <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/check_pre_release"
+                android:id="@+id/check_browser_download"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:maxLines="1"
                 android:paddingStart="@dimen/padding_spacing_dp16"
-                android:text="@string/update_check_pre_release"
+                android:text="@string/update_browser_download"
                 android:textAppearance="@style/TextAppearance.AppCompat.Small"
                 app:theme="@style/BrandedSwitch" />
         </LinearLayout>

@@ -31,28 +31,28 @@ class CheckUpdateActivity : BaseActivity() {
         setContentViewWithToolbar(binding.root, showHomeAsUp = true, title = getString(R.string.update_check_for_update))
 
         binding.layoutCheckUpdate.setOnClickListener {
-            checkForUpdates(binding.checkPreRelease.isChecked)
+            checkForUpdates()
         }
 
-        binding.checkPreRelease.setOnCheckedChangeListener { _, isChecked ->
-            MmkvManager.encodeSettings(AppConfig.PREF_CHECK_UPDATE_PRE_RELEASE, isChecked)
+        binding.checkBrowserDownload.setOnCheckedChangeListener { _, isChecked ->
+            MmkvManager.encodeSettings(AppConfig.PREF_UPDATE_BROWSER_DOWNLOAD, isChecked)
         }
-        binding.checkPreRelease.isChecked = MmkvManager.decodeSettingsBool(AppConfig.PREF_CHECK_UPDATE_PRE_RELEASE, false)
+        binding.checkBrowserDownload.isChecked = MmkvManager.decodeSettingsBool(AppConfig.PREF_UPDATE_BROWSER_DOWNLOAD, false)
 
         "${com.v2ray.ang.limm.LimmConfig.displayVersion} (${CoreNativeManager.getLibVersion()})".also {
             binding.tvVersion.text = it
         }
 
-        checkForUpdates(binding.checkPreRelease.isChecked)
+        checkForUpdates()
     }
 
-    private fun checkForUpdates(includePreRelease: Boolean) {
+    private fun checkForUpdates() {
         toast(R.string.update_checking_for_update)
         showLoading()
 
         lifecycleScope.launch {
             try {
-                val result = UpdateCheckerManager.checkForUpdate(includePreRelease)
+                val result = UpdateCheckerManager.checkForUpdate(false)
                 if (result.hasUpdate) {
                     showUpdateDialog(result)
                 } else {
@@ -69,13 +69,18 @@ class CheckUpdateActivity : BaseActivity() {
 
     private fun showUpdateDialog(result: CheckUpdateResult) {
         val url = result.downloadUrl ?: return
+        val useBrowser = MmkvManager.decodeSettingsBool(AppConfig.PREF_UPDATE_BROWSER_DOWNLOAD, false)
 
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.update_new_version_found, result.latestVersion))
             .setMessage(result.releaseNotes)
             .setPositiveButton(R.string.update_now) { dlg, _ ->
                 dlg.dismiss()
-                startInAppDownload(url, result.latestVersion ?: "")
+                if (useBrowser) {
+                    com.v2ray.ang.util.Utils.openUri(this, com.v2ray.ang.limm.LimmConfig.collectorUrl + "/vpn/app")
+                } else {
+                    startInAppDownload(url, result.latestVersion ?: "")
+                }
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
