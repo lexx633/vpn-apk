@@ -41,6 +41,7 @@ object LimmDiagTest {
     private const val TAG = "LimmDiag"
     private const val POLL_INTERVAL_MS = 80L
     private const val RUN_TIMEOUT_MS = 20_000L   // 20 s max per run
+    private const val COLD_START_CHECK_MS = 20_000L  // browser re-check at +20s mark
 
     data class Phase(val name: String, val ok: Boolean, val fromStartMs: Long, val note: String = "")
     data class RunResult(val label: String, val phases: List<Phase>)
@@ -174,6 +175,21 @@ object LimmDiagTest {
                 if (exOk) "${exMs}ms" else "FAIL code=$exCode"
             )
         }
+
+        // ── Phase F: cold-start check — browser via TUN at +20s mark ──────────
+        // Wait until 20 s have elapsed from VPN start (subtract time already spent).
+        val elapsed = System.currentTimeMillis() - runT0
+        val waitMs = (COLD_START_CHECK_MS - elapsed).coerceAtLeast(0L)
+        if (waitMs > 0) delay(waitMs)
+        Log.i(TAG, "  Phase F: cold-start browser recheck at +${System.currentTimeMillis() - runT0}ms")
+        val (csOk, csCode, csReqMs) = httpViaTun(ctx, "https://www.google.com/generate_204")
+        phases += Phase(
+            "HTTP(TUN) @+20s",
+            csOk,
+            System.currentTimeMillis() - runT0,
+            if (csOk) "код=$csCode, ${csReqMs}ms — cold-start OK ✓"
+            else "FAIL код=$csCode ${csReqMs}ms — cold-start баг!"
+        )
 
         return phases
     }
