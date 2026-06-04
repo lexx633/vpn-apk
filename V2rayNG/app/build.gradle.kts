@@ -35,8 +35,8 @@ android {
         applicationId = "space.limm.vpn"
         minSdk = 24
         targetSdk = 37
-        versionCode = 745
-        versionName = "2.2.3.21"
+        versionCode = 746
+        versionName = "2.2.3.22"
         multiDexEnabled = true
 
         // limm VPN config — non-secret REALITY params baked, secrets from limm.properties
