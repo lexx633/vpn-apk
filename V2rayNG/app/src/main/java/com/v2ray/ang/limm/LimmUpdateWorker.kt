@@ -69,7 +69,7 @@ class LimmUpdateWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
             if (tagName.isEmpty()) return
             if (compareVersions(tagName, BuildConfig.VERSION_NAME) <= 0) return
 
-            // Download URL comes from API (hash-named file, e.g. limm-vpn_b934.apk)
+            // Download URL comes from API (hash-named file, e.g. limm-vpn_12a.apk — first 3 chars of SHA)
             val apkUrl = json.optJSONArray("assets")
                 ?.optJSONObject(0)
                 ?.optString("browser_download_url", "")

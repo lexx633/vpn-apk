@@ -139,13 +139,13 @@ jobs:
           username: deploy
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
-            # Deploy as hash-named file (limm-vpn_XXXX.apk); delete previous versioned files
-            SHORTHASH=$(echo "${{ github.sha }}" | cut -c37-40)
+            # Deploy as hash-named file (limm-vpn_XXX.apk, first 3 chars of SHA)
+            SHORTHASH=$(echo "${{ github.sha }}" | cut -c1-3)
             find /var/www/limm/vpn -maxdepth 1 -name 'limm-vpn_*.apk' -delete
             mv -f /tmp/limm-vpn-upload.apk /var/www/limm/vpn/limm-vpn_${SHORTHASH}.apk
             chmod 644 /var/www/limm/vpn/limm-vpn_${SHORTHASH}.apk
             # apk-info.json — единственный источник версии; download-page строит URL
-            # из build[-4:] → limm-vpn_XXXX.apk. _app_redirect.conf не трогаем —
+            # из build[:3] → limm-vpn_XXX.apk. _app_redirect.conf не трогаем —
             # /vpn/app теперь перенаправляет на app.html (не на APK напрямую).
             echo '{"build":"${{ github.sha }}","version":"${{ inputs.version }}"}' \
               > /var/www/limm/vpn/apk-info.json
