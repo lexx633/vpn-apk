@@ -212,16 +212,19 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             var services: JSONObject? = null
 
             if (l0 == 1) {
-                l1 = if (tcpOk(srvIp, 443)) 1 else 0
+                // Time the direct TCP connect to server (app is excluded from its own TUN, so
+                // this bypasses the VPN and measures raw internet RTT — same as macOS curlDirect).
+                // tcpLatencyViaSocks was wrong: Xray SOCKS5 replies to CONNECT before the tunnel
+                // is established, so it only measured local SOCKS handshake (~3ms), not tunnel RTT.
+                val l1t0 = System.currentTimeMillis()
+                val l1ok = tcpOk(srvIp, 443)
+                l1 = if (l1ok) 1 else 0
+                if (l1ok) latency = System.currentTimeMillis() - l1t0
             }
             // Tunnel probes only make sense when the VPN is actually on. When it's off, the SOCKS
             // inbound isn't serving, so every probe would burn 3×12s of timeouts for nothing
             // (battery on mobile). Server maps vpn_running==0 → vpn_off regardless of l2..l4.
             if (l0 == 1 && l1 == 1 && running) {
-                // Latency = pure TCP connect via SOCKS to server:443. No DNS, no TLS overhead —
-                // gives clean tunnel RTT (~50-150ms). ipify HTTP would include DNS-through-tunnel
-                // which is slow and unreliable (was returning 14 000ms).
-                latency = tcpLatencyViaSocks(srvIp, 443, socksPort)
 
                 // L2/L3 via the local SOCKS proxy → this traffic goes THROUGH the tunnel.
                 // A successful response = REALITY handshake is up (L2). Egress == server IP = L3.
