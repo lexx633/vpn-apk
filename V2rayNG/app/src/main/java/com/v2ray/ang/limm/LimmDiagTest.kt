@@ -10,8 +10,12 @@ import com.v2ray.ang.handler.SettingsManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
@@ -72,6 +76,37 @@ object LimmDiagTest {
             .execute().use { r -> if (r.isSuccessful) r.body?.string()?.trim() else null }
     } catch (e: Exception) { null }
 
+    private data class ProfileResult(val name: String, val ok: Boolean, val latencyMs: Long?)
+
+    private fun postFullTest(ctx: Context, profiles: List<ProfileResult>) {
+        if (profiles.isEmpty()) return
+        try {
+            val arr = JSONArray()
+            for (p in profiles) {
+                val obj = JSONObject().apply {
+                    put("name", p.name)
+                    put("ok", if (p.ok) 1 else 0)
+                    if (p.latencyMs != null) put("latency_ms", p.latencyMs)
+                }
+                arr.put(obj)
+            }
+            val payload = JSONObject().apply {
+                put("client_uid", LimmConfig.clientUid(ctx))
+                put("kind", "android")
+                put("profiles", arr)
+            }
+            val body = payload.toString().toRequestBody("application/json".toMediaType())
+            OkHttpClient.Builder().connectTimeout(12, TimeUnit.SECONDS).readTimeout(12, TimeUnit.SECONDS).build()
+                .newCall(Request.Builder()
+                    .url("${LimmConfig.collectorUrl}/api/fulltest")
+                    .header("Authorization", "Bearer ${LimmConfig.token}")
+                    .post(body).build())
+                .execute().use { }
+        } catch (e: Exception) {
+            Log.w(TAG, "postFullTest: ${e.message}")
+        }
+    }
+
     suspend fun run(ctx: Context, onProgress: (String) -> Unit) {
         val permIntent = android.net.VpnService.prepare(ctx)
         if (permIntent != null) {
@@ -99,6 +134,8 @@ object LimmDiagTest {
 
         onProgress("\n── Профили (${guids.size}) ──\n")
 
+        val profileResults = mutableListOf<ProfileResult>()
+
         for (guid in guids) {
             val cfg = MmkvManager.decodeServerConfig(guid)
             val name = cfg?.remarks?.takeIf { it.isNotEmpty() } ?: guid.take(8)
@@ -116,6 +153,7 @@ object LimmDiagTest {
             if (!socksReady) {
                 onProgress("    ✗  ▸ $name  (SOCKS :$socksPort не поднялся за 10s)")
                 Log.w(TAG, "profile $name: SOCKS timeout")
+                profileResults.add(ProfileResult(name, false, null))
                 withContext(Dispatchers.Main) { CoreServiceManager.stopVService(ctx) }
                 delay(1500)
                 continue
@@ -132,6 +170,7 @@ object LimmDiagTest {
             }
             onProgress("    ${if (vpnOk) "✓" else "✗"}  ▸ $name  ($note)")
             Log.i(TAG, "profile $name: egress=$egress expected=$serverIp ok=$vpnOk ms=$ms")
+            profileResults.add(ProfileResult(name, vpnOk, if (vpnOk) ms else null))
 
             withContext(Dispatchers.Main) { CoreServiceManager.stopVService(ctx) }
             delay(1000)
@@ -141,6 +180,9 @@ object LimmDiagTest {
         if (savedGuid != null) {
             withContext(Dispatchers.Main) { MmkvManager.setSelectServer(savedGuid) }
         }
+
+        // Upload profile test results to /api/fulltest
+        withContext(Dispatchers.IO) { postFullTest(ctx, profileResults) }
 
         Log.i(TAG, "=== LIMM DIAG TEST END ===")
 

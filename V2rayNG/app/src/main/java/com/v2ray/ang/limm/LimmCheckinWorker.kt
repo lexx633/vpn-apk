@@ -219,14 +219,15 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             var services: JSONObject? = null
 
             if (l0 == 1) {
-                // Time the direct TCP connect to server (app is excluded from its own TUN, so
-                // this bypasses the VPN and measures raw internet RTT — same as macOS curlDirect).
-                // tcpLatencyViaSocks was wrong: Xray SOCKS5 replies to CONNECT before the tunnel
-                // is established, so it only measured local SOCKS handshake (~3ms), not tunnel RTT.
-                val l1t0 = System.currentTimeMillis()
-                val l1ok = tcpOk(srvIp, 443)
-                l1 = if (l1ok) 1 else 0
-                if (l1ok) latency = System.currentTimeMillis() - l1t0
+                // 3 direct TCP connects → average RTT (app excluded from own TUN → bypasses VPN).
+                val samples = mutableListOf<Long>()
+                var anyOk = false
+                repeat(3) {
+                    val t0 = System.currentTimeMillis()
+                    if (tcpOk(srvIp, 443)) { samples.add(System.currentTimeMillis() - t0); anyOk = true }
+                }
+                l1 = if (anyOk) 1 else 0
+                if (samples.isNotEmpty()) latency = samples.sum() / samples.size
             }
             // Tunnel probes only make sense when the VPN is actually on. When it's off, the SOCKS
             // inbound isn't serving, so every probe would burn 3×12s of timeouts for nothing
@@ -241,10 +242,14 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                     egress = body
                     l3 = if (egress == srvIp) 1 else 0
                 }
-                // tunnel_ms — full HTTP roundtrip through VPN tunnel (single attempt, 5s timeout)
-                val tmsT0 = System.currentTimeMillis()
-                val (tmsOk, _) = httpGetViaSocks("https://www.gstatic.com/generate_204", socksPort, timeoutSec = 5, tries = 1)
-                if (tmsOk) tunnelMs = System.currentTimeMillis() - tmsT0
+                // tunnel_ms — 3 HTTP roundtrips through VPN tunnel → average
+                val tmsSamples = mutableListOf<Long>()
+                repeat(3) {
+                    val t0 = System.currentTimeMillis()
+                    val (ok, _) = httpGetViaSocks("https://www.gstatic.com/generate_204", socksPort, timeoutSec = 5, tries = 1)
+                    if (ok) tmsSamples.add(System.currentTimeMillis() - t0)
+                }
+                if (tmsSamples.isNotEmpty()) tunnelMs = tmsSamples.sum() / tmsSamples.size
 
                 // Browser-like reachability test through the tunnel — run ALWAYS (not gated on l3),
                 // so we can tell "tunnel up but no traffic" apart from "no tunnel". Mirrors a page load.
