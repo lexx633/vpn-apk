@@ -114,7 +114,7 @@ object LimmLogReporter {
         o.put("egress_ip_tunnel", if (tOk) tIp else JSONObject.NULL)
         o.put("l3_tunnel", if (tOk && tIp == srvIp) 1 else 0)
 
-        val (g, _) = httpGet("https://www.google.com/generate_204")
+        val (g, _) = httpGetViaSocks("https://www.google.com/generate_204", socksPort, timeoutSec = 5, tries = 1)
         o.put("l4_browser", if (g) 1 else 0)
         return o
     }

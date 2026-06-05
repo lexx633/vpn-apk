@@ -84,8 +84,14 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 val payload = runLadder(ctx)
                 post(payload)
                 val l3 = payload.opt("l3_tunnel")
-                val egress = payload.optString("egress_ip", "?")
-                val tun = if (l3 == 1) "туннель OK ($egress)" else "туннель НЕ через сервер ($egress)"
+                val vpnRunning = payload.optInt("vpn_running", 0)
+                val egressRaw = payload.opt("egress_ip")
+                val egress = if (egressRaw == null || egressRaw == JSONObject.NULL) null else egressRaw.toString()
+                val tun = when {
+                    l3 == 1         -> "туннель OK ($egress)"
+                    vpnRunning == 0 -> "VPN выключен"
+                    else            -> "туннель НЕ через сервер (${egress ?: "нет ответа"})"
+                }
                 true to "Чек-ин отправлен: $tun"
             } catch (e: Exception) {
                 false to (e.localizedMessage ?: e.toString())
