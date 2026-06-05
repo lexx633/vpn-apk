@@ -210,6 +210,7 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             var l4: Int? = null
             var egress: String? = null
             var latency: Long? = null
+            var tunnelMs: Long? = null
 
             var browserOk: Int? = null
             var browserHost: String? = null
@@ -240,6 +241,11 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                     egress = body
                     l3 = if (egress == srvIp) 1 else 0
                 }
+                // tunnel_ms — full HTTP roundtrip through VPN tunnel (single attempt, 5s timeout)
+                val tmsT0 = System.currentTimeMillis()
+                val (tmsOk, _) = httpGetViaSocks("https://www.gstatic.com/generate_204", socksPort, timeoutSec = 5, tries = 1)
+                if (tmsOk) tunnelMs = System.currentTimeMillis() - tmsT0
+
                 // Browser-like reachability test through the tunnel — run ALWAYS (not gated on l3),
                 // so we can tell "tunnel up but no traffic" apart from "no tunnel". Mirrors a page load.
                 val (g204, _) = httpGetViaSocks("https://www.google.com/generate_204", socksPort)
@@ -283,6 +289,7 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                     put("dest_google", destGoogle ?: JSONObject.NULL)
                     put("dest_telegram", destTelegram ?: JSONObject.NULL)
                     put("services", services ?: JSONObject.NULL)
+                    put("tunnel_ms", tunnelMs ?: JSONObject.NULL)
                 })
                 put("app_version", LimmConfig.appVersion)
                 put("os_version", "Android ${Build.VERSION.RELEASE}")
