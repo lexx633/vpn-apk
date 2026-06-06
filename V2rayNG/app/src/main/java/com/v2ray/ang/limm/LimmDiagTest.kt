@@ -65,6 +65,15 @@ object LimmDiagTest {
         return false
     }
 
+    /** Wait until the SOCKS port stops accepting — old Xray is fully dead. Max 6s. */
+    private suspend fun waitForSocksClosed(port: Int) {
+        val deadline = System.currentTimeMillis() + 6_000L
+        while (System.currentTimeMillis() < deadline) {
+            if (!socksAccepting(port)) return
+            delay(250)
+        }
+    }
+
     private fun egressViaSocks(socksPort: Int): String? = try {
         val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
         OkHttpClient.Builder()
@@ -173,16 +182,45 @@ object LimmDiagTest {
             profileResults.add(ProfileResult(name, vpnOk, if (vpnOk) ms else null))
 
             withContext(Dispatchers.Main) { CoreServiceManager.stopVService(ctx) }
-            delay(1000)
+            delay(500)
+            // Wait for old Xray to fully die before starting next profile.
+            // Without this, old Xray's SOCKS inbound may still serve the next profile's
+            // egress check → reports ok=1 through the previous (working) tunnel.
+            withContext(Dispatchers.IO) { waitForSocksClosed(socksPort) }
+        }
+
+        // Upload profile test results to /api/fulltest
+        withContext(Dispatchers.IO) { postFullTest(ctx, profileResults) }
+
+        // Post-test checkin: switch to best working profile, run full checkin so the
+        // dashboard shows correct Статус / Сервисы / Пинг after Full Test.
+        val bestIdx = profileResults.indexOfFirst { it.ok }
+        if (bestIdx >= 0) {
+            val bestGuid = guids[bestIdx]
+            val bestName = profileResults[bestIdx].name
+            onProgress("\n⏳  Чекин (VPN on · $bestName)…")
+            Log.i(TAG, "post-test checkin: switching to $bestName ($bestGuid)")
+            withContext(Dispatchers.Main) {
+                MmkvManager.setSelectServer(bestGuid)
+                CoreServiceManager.startVService(ctx)
+            }
+            val ckReady = waitForSocks(socksPort)
+            if (ckReady) {
+                val (ckOk, ckMsg) = withContext(Dispatchers.IO) { LimmCheckinWorker.sendNow(ctx) }
+                onProgress(if (ckOk) "    ✓ $ckMsg" else "    ✗ $ckMsg")
+                Log.i(TAG, "post-test checkin: ok=$ckOk $ckMsg")
+            } else {
+                onProgress("    ✗ SOCKS не поднялся для чекина")
+            }
+            withContext(Dispatchers.Main) { CoreServiceManager.stopVService(ctx) }
+            delay(500)
+            withContext(Dispatchers.IO) { waitForSocksClosed(socksPort) }
         }
 
         // Restore original profile
         if (savedGuid != null) {
             withContext(Dispatchers.Main) { MmkvManager.setSelectServer(savedGuid) }
         }
-
-        // Upload profile test results to /api/fulltest
-        withContext(Dispatchers.IO) { postFullTest(ctx, profileResults) }
 
         Log.i(TAG, "=== LIMM DIAG TEST END ===")
 
