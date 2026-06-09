@@ -160,8 +160,8 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 }
                 return false to ""
             } finally {
-                c.dispatcher().executorService().shutdown()
-                c.connectionPool().evictAll()
+                c.dispatcher.executorService.shutdown()
+                c.connectionPool.evictAll()
             }
         }
 

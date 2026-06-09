@@ -40,6 +40,7 @@ class LimmUpdateWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
     }
 
     companion object {
+        private const val TAG = "LimmUpdate"
         private const val CHANNEL_ID = "limm_update"
         private const val NOTIF_ID = 8844
         private const val UNIQUE = "limm_update"

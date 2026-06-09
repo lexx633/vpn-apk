@@ -239,8 +239,8 @@ object LimmLogReporter {
         } catch (e: Exception) {
             false to ""
         } finally {
-            c.dispatcher().executorService().shutdown()
-            c.connectionPool().evictAll()
+            c.dispatcher.executorService.shutdown()
+            c.connectionPool.evictAll()
         }
     }
 
@@ -266,8 +266,8 @@ object LimmLogReporter {
             }
             return false to ""
         } finally {
-            c.dispatcher().executorService().shutdown()
-            c.connectionPool().evictAll()
+            c.dispatcher.executorService.shutdown()
+            c.connectionPool.evictAll()
         }
     }
 }

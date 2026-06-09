@@ -9,6 +9,7 @@ import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SettingsManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -129,7 +130,7 @@ object LimmDiagTest {
         if (wasRunning) {
             onProgress("⏹  Останавливаю VPN…")
             withContext(Dispatchers.Main) {
-                if (!coroutineContext.isActive) return@withContext
+                if (!isActive) return@withContext
                 CoreServiceManager.stopVService(ctx)
             }
             delay(2000)
@@ -159,7 +160,7 @@ object LimmDiagTest {
             Log.i(TAG, "--- profile: $name ($guid) ---")
 
             withContext(Dispatchers.Main) {
-                if (!coroutineContext.isActive) return@withContext
+                if (!isActive) return@withContext
                 MmkvManager.setSelectServer(guid)
                 CoreServiceManager.startVService(ctx)
             }
@@ -171,7 +172,7 @@ object LimmDiagTest {
                 Log.w(TAG, "profile $name: SOCKS timeout")
                 profileResults.add(ProfileResult(name, false, null))
                 withContext(Dispatchers.Main) {
-                    if (!coroutineContext.isActive) return@withContext
+                    if (!isActive) return@withContext
                     CoreServiceManager.stopVService(ctx)
                 }
                 delay(1500)
@@ -192,7 +193,7 @@ object LimmDiagTest {
             profileResults.add(ProfileResult(name, vpnOk, if (vpnOk) ms else null))
 
             withContext(Dispatchers.Main) {
-                if (!coroutineContext.isActive) return@withContext
+                if (!isActive) return@withContext
                 CoreServiceManager.stopVService(ctx)
             }
             delay(500)
@@ -215,7 +216,7 @@ object LimmDiagTest {
             onProgress("\n⏳  Чекин (VPN on · $bestName)…")
             Log.i(TAG, "post-test checkin: switching to $bestName ($bestGuid)")
             withContext(Dispatchers.Main) {
-                if (!coroutineContext.isActive) return@withContext
+                if (!isActive) return@withContext
                 MmkvManager.setSelectServer(bestGuid)
                 CoreServiceManager.startVService(ctx)
             }
@@ -233,7 +234,7 @@ object LimmDiagTest {
                 onProgress("    ✗ SOCKS не поднялся для чекина")
             }
             withContext(Dispatchers.Main) {
-                if (!coroutineContext.isActive) return@withContext
+                if (!isActive) return@withContext
                 CoreServiceManager.stopVService(ctx)
             }
             delay(500)
@@ -243,7 +244,7 @@ object LimmDiagTest {
         // Restore original profile
         if (savedGuid != null) {
             withContext(Dispatchers.Main) {
-                if (!coroutineContext.isActive) return@withContext
+                if (!isActive) return@withContext
                 MmkvManager.setSelectServer(savedGuid)
             }
         }
@@ -253,7 +254,7 @@ object LimmDiagTest {
         if (wasRunning) {
             onProgress("\n▶  Восстанавливаю VPN…")
             withContext(Dispatchers.Main) {
-                if (!coroutineContext.isActive) return@withContext
+                if (!isActive) return@withContext
                 CoreServiceManager.startVService(ctx)
             }
         }
