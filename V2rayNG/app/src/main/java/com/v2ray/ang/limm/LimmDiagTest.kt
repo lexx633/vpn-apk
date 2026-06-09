@@ -195,6 +195,7 @@ object LimmDiagTest {
         // Post-test checkin: switch to best working profile, run full checkin so the
         // dashboard shows correct Статус / Сервисы / Пинг after Full Test.
         val bestIdx = profileResults.indexOfFirst { it.ok }
+        var logUploaded = false
         if (bestIdx >= 0) {
             val bestGuid = guids[bestIdx]
             val bestName = profileResults[bestIdx].name
@@ -209,6 +210,11 @@ object LimmDiagTest {
                 val (ckOk, ckMsg) = withContext(Dispatchers.IO) { LimmCheckinWorker.sendNow(ctx) }
                 onProgress(if (ckOk) "    ✓ $ckMsg" else "    ✗ $ckMsg")
                 Log.i(TAG, "post-test checkin: ok=$ckOk $ckMsg")
+                // Upload log while VPN is still on — limm.space may not resolve without the tunnel.
+                onProgress("\n📤  Отправляю лог на сервер…")
+                val (logOk, logMsg) = withContext(Dispatchers.IO) { LimmLogReporter.send(ctx) }
+                onProgress(if (logOk) "    ✓ Лог отправлен" else "    ✗ $logMsg")
+                logUploaded = true
             } else {
                 onProgress("    ✗ SOCKS не поднялся для чекина")
             }
@@ -224,8 +230,11 @@ object LimmDiagTest {
 
         Log.i(TAG, "=== LIMM DIAG TEST END ===")
 
-        onProgress("\n📤  Отправляю лог на сервер…")
-        val (logOk, logMsg) = LimmLogReporter.send(ctx)
-        onProgress(if (logOk) "    ✓ Лог отправлен" else "    ✗ $logMsg")
+        // Fallback: upload log without VPN (only when no working profile was found).
+        if (!logUploaded) {
+            onProgress("\n📤  Отправляю лог на сервер…")
+            val (logOk, logMsg) = withContext(Dispatchers.IO) { LimmLogReporter.send(ctx) }
+            onProgress(if (logOk) "    ✓ Лог отправлен" else "    ✗ $logMsg")
+        }
     }
 }
