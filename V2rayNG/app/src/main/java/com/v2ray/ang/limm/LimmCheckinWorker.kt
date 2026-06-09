@@ -143,21 +143,26 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 .connectTimeout(timeoutSec, TimeUnit.SECONDS)
                 .readTimeout(timeoutSec, TimeUnit.SECONDS)
                 .build()
-            repeat(tries) { attempt ->
-                try {
-                    c.newCall(Request.Builder().url(url).build()).execute().use { r ->
-                        if (r.isSuccessful) return true to (r.body?.string()?.trim() ?: "")
+            try {
+                repeat(tries) { attempt ->
+                    try {
+                        c.newCall(Request.Builder().url(url).build()).execute().use { r ->
+                            if (r.isSuccessful) return true to (r.body?.string()?.trim() ?: "")
+                        }
+                    } catch (e: Exception) {
+                        // swallow and retry
                     }
-                } catch (e: Exception) {
-                    // swallow and retry
+                    if (attempt < tries - 1) try { Thread.sleep(1500) } catch (e: InterruptedException) {
+                        // L2: restore interrupt status so worker cancellation propagates.
+                        Thread.currentThread().interrupt()
+                        return false to ""
+                    }
                 }
-                if (attempt < tries - 1) try { Thread.sleep(1500) } catch (e: InterruptedException) {
-                    // L2: restore interrupt status so worker cancellation propagates.
-                    Thread.currentThread().interrupt()
-                    return false to ""
-                }
+                return false to ""
+            } finally {
+                c.dispatcher().executorService().shutdown()
+                c.connectionPool().evictAll()
             }
-            return false to ""
         }
 
         /**
@@ -323,7 +328,9 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 .header("User-Agent", "limm-android/1.0")
                 .post(body)
                 .build()
-            c.newCall(req).execute().use { /* response body ignored */ }
+            c.newCall(req).execute().use { r ->
+                if (!r.isSuccessful) throw java.io.IOException("checkin HTTP ${r.code}")
+            }
         }
     }
 }

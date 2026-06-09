@@ -29,11 +29,13 @@ object LimmBootstrap {
     private const val SUB_GUID = "limm00000000000000000000000000001"
 
     private val mmkv: MMKV by lazy { MMKV.mmkvWithID(MMKV_ID, MMKV.MULTI_PROCESS_MODE) }
+    private val imported = java.util.concurrent.atomic.AtomicBoolean(false)
 
     fun ensureServerImported(ctx: Context) {
         try {
             if (!LimmConfig.isConfigured()) return
             if (mmkv.decodeBool(KEY_SUB_IMPORTED, false)) return
+            if (!imported.compareAndSet(false, true)) return
 
             // Register / refresh the limm subscription and enable periodic auto-update.
             val sub = SubscriptionItem(
@@ -64,7 +66,7 @@ object LimmBootstrap {
                 } catch (e: Exception) {
                     LogUtil.e(AppConfig.TAG, "limm: subscription import failed", e)
                 }
-            }.start()
+            }.also { it.name = "limm-bootstrap" }.start()
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "limm: bootstrap failed", e)
         }

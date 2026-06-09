@@ -110,7 +110,9 @@ object LimmDiagTest {
                     .url("${LimmConfig.collectorUrl}/api/fulltest")
                     .header("Authorization", "Bearer ${LimmConfig.token}")
                     .post(body).build())
-                .execute().use { }
+                .execute().use { r ->
+                    if (!r.isSuccessful) Log.w(TAG, "postFullTest: server returned ${r.code}")
+                }
         } catch (e: Exception) {
             Log.w(TAG, "postFullTest: ${e.message}")
         }
@@ -126,7 +128,10 @@ object LimmDiagTest {
         val wasRunning = CoreServiceManager.isRunning() || vpnTransportUp(ctx)
         if (wasRunning) {
             onProgress("⏹  Останавливаю VPN…")
-            withContext(Dispatchers.Main) { CoreServiceManager.stopVService(ctx) }
+            withContext(Dispatchers.Main) {
+                if (!coroutineContext.isActive) return@withContext
+                CoreServiceManager.stopVService(ctx)
+            }
             delay(2000)
         }
 
@@ -154,6 +159,7 @@ object LimmDiagTest {
             Log.i(TAG, "--- profile: $name ($guid) ---")
 
             withContext(Dispatchers.Main) {
+                if (!coroutineContext.isActive) return@withContext
                 MmkvManager.setSelectServer(guid)
                 CoreServiceManager.startVService(ctx)
             }
@@ -164,7 +170,10 @@ object LimmDiagTest {
                 onProgress("    ✗  ▸ $name  (SOCKS :$socksPort не поднялся за 10s)")
                 Log.w(TAG, "profile $name: SOCKS timeout")
                 profileResults.add(ProfileResult(name, false, null))
-                withContext(Dispatchers.Main) { CoreServiceManager.stopVService(ctx) }
+                withContext(Dispatchers.Main) {
+                    if (!coroutineContext.isActive) return@withContext
+                    CoreServiceManager.stopVService(ctx)
+                }
                 delay(1500)
                 continue
             }
@@ -182,7 +191,10 @@ object LimmDiagTest {
             Log.i(TAG, "profile $name: egress=$egress expected=$serverIp ok=$vpnOk ms=$ms")
             profileResults.add(ProfileResult(name, vpnOk, if (vpnOk) ms else null))
 
-            withContext(Dispatchers.Main) { CoreServiceManager.stopVService(ctx) }
+            withContext(Dispatchers.Main) {
+                if (!coroutineContext.isActive) return@withContext
+                CoreServiceManager.stopVService(ctx)
+            }
             delay(500)
             // Wait for old Xray to fully die before starting next profile.
             // Without this, old Xray's SOCKS inbound may still serve the next profile's
@@ -203,6 +215,7 @@ object LimmDiagTest {
             onProgress("\n⏳  Чекин (VPN on · $bestName)…")
             Log.i(TAG, "post-test checkin: switching to $bestName ($bestGuid)")
             withContext(Dispatchers.Main) {
+                if (!coroutineContext.isActive) return@withContext
                 MmkvManager.setSelectServer(bestGuid)
                 CoreServiceManager.startVService(ctx)
             }
@@ -219,21 +232,30 @@ object LimmDiagTest {
             } else {
                 onProgress("    ✗ SOCKS не поднялся для чекина")
             }
-            withContext(Dispatchers.Main) { CoreServiceManager.stopVService(ctx) }
+            withContext(Dispatchers.Main) {
+                if (!coroutineContext.isActive) return@withContext
+                CoreServiceManager.stopVService(ctx)
+            }
             delay(500)
             withContext(Dispatchers.IO) { waitForSocksClosed(socksPort) }
         }
 
         // Restore original profile
         if (savedGuid != null) {
-            withContext(Dispatchers.Main) { MmkvManager.setSelectServer(savedGuid) }
+            withContext(Dispatchers.Main) {
+                if (!coroutineContext.isActive) return@withContext
+                MmkvManager.setSelectServer(savedGuid)
+            }
         }
 
         // M1: if the VPN was running when the test started, bring it back up — the test
         // only restored the selected profile, leaving the service itself off.
         if (wasRunning) {
             onProgress("\n▶  Восстанавливаю VPN…")
-            withContext(Dispatchers.Main) { CoreServiceManager.startVService(ctx) }
+            withContext(Dispatchers.Main) {
+                if (!coroutineContext.isActive) return@withContext
+                CoreServiceManager.startVService(ctx)
+            }
         }
 
         Log.i(TAG, "=== LIMM DIAG TEST END ===")

@@ -29,6 +29,7 @@ object LimmSelfUpdater {
 
     private const val TAG = "LimmUpdate"
     const val APK_CACHE_NAME = "limm-vpn-update.apk"
+    private const val MAX_APK_BYTES = 100 * 1024 * 1024L
 
     // ── Download ─────────────────────────────────────────────────────────────
 
@@ -68,6 +69,7 @@ object LimmSelfUpdater {
                         while (input.read(buf).also { n = it } != -1) {
                             output.write(buf, 0, n)
                             downloaded += n
+                            if (downloaded > MAX_APK_BYTES) throw java.io.IOException("APK exceeds size limit")
                             if (total > 0) onProgress((downloaded * 100L / total).toInt())
                         }
                     }

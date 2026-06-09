@@ -175,8 +175,8 @@ class LimmUpdateWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
             val a = v1.split(".")
             val b = v2.split(".")
             for (i in 0 until maxOf(a.size, b.size)) {
-                val n1 = if (i < a.size) a[i].toIntOrNull() ?: 0 else 0
-                val n2 = if (i < b.size) b[i].toIntOrNull() ?: 0 else 0
+                val n1 = if (i < a.size) a[i].toIntOrNull() ?: run { android.util.Log.w(TAG, "invalid version part: ${a[i]}"); 0 } else 0
+                val n2 = if (i < b.size) b[i].toIntOrNull() ?: run { android.util.Log.w(TAG, "invalid version part: ${b[i]}"); 0 } else 0
                 if (n1 != n2) return n1 - n2
             }
             return 0

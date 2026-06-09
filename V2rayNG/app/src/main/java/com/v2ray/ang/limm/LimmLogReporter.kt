@@ -158,6 +158,7 @@ object LimmLogReporter {
         return try {
             val t0 = System.currentTimeMillis()
             val addrs = java.net.InetAddress.getAllByName(host)
+            if (addrs.isEmpty()) return o
             o.put("ms", System.currentTimeMillis() - t0)
             val arr = JSONArray()
             var v4 = 0; var v6 = 0
@@ -208,7 +209,12 @@ object LimmLogReporter {
             "logcat", "-d", "-v", "time", "-t", limit.toString(),
             "-s", "GoLog,LimmDiag,$ANG_PACKAGE,AndroidRuntime,System.err,tun2socks"
         )
-        Runtime.getRuntime().exec(cmd).inputStream.bufferedReader().use { it.readLines() }
+        val proc = Runtime.getRuntime().exec(cmd)
+        try {
+            proc.inputStream.bufferedReader().use { it.readLines() }
+        } finally {
+            proc.destroyForcibly()
+        }
     } catch (e: Exception) {
         listOf("logcat read failed: ${e.message}")
     }
@@ -221,16 +227,21 @@ object LimmLogReporter {
         false
     }
 
-    private fun httpGet(url: String, timeoutSec: Long = 8): Pair<Boolean, String> = try {
+    private fun httpGet(url: String, timeoutSec: Long = 8): Pair<Boolean, String> {
         val c = OkHttpClient.Builder()
             .connectTimeout(timeoutSec, TimeUnit.SECONDS)
             .readTimeout(timeoutSec, TimeUnit.SECONDS)
             .build()
-        c.newCall(Request.Builder().url(url).build()).execute().use { r ->
-            (r.isSuccessful) to (r.body?.string()?.trim() ?: "")
+        return try {
+            c.newCall(Request.Builder().url(url).build()).execute().use { r ->
+                (r.isSuccessful) to (r.body?.string()?.trim() ?: "")
+            }
+        } catch (e: Exception) {
+            false to ""
+        } finally {
+            c.dispatcher().executorService().shutdown()
+            c.connectionPool().evictAll()
         }
-    } catch (e: Exception) {
-        false to ""
     }
 
     /** Same as httpGet but routed through the local SOCKS proxy so it traverses the tunnel.
@@ -242,16 +253,21 @@ object LimmLogReporter {
             .connectTimeout(timeoutSec, TimeUnit.SECONDS)
             .readTimeout(timeoutSec, TimeUnit.SECONDS)
             .build()
-        repeat(tries) { attempt ->
-            try {
-                c.newCall(Request.Builder().url(url).build()).execute().use { r ->
-                    if (r.isSuccessful) return true to (r.body?.string()?.trim() ?: "")
+        try {
+            repeat(tries) { attempt ->
+                try {
+                    c.newCall(Request.Builder().url(url).build()).execute().use { r ->
+                        if (r.isSuccessful) return true to (r.body?.string()?.trim() ?: "")
+                    }
+                } catch (e: Exception) {
+                    // swallow and retry
                 }
-            } catch (e: Exception) {
-                // swallow and retry
+                if (attempt < tries - 1) try { Thread.sleep(1500) } catch (e: InterruptedException) {}
             }
-            if (attempt < tries - 1) try { Thread.sleep(1500) } catch (e: InterruptedException) {}
+            return false to ""
+        } finally {
+            c.dispatcher().executorService().shutdown()
+            c.connectionPool().evictAll()
         }
-        return false to ""
     }
 }
