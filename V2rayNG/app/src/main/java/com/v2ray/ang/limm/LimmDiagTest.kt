@@ -36,7 +36,8 @@ import java.util.concurrent.TimeUnit
  *  4. Restore original profile
  *  5. Upload applog
  *
- * Max time per profile: ~25s (10s SOCKS wait + 15s egress timeout).
+ * Max time per profile: ~60s (10s SOCKS wait + 3×15s egress retries + overhead).
+ * XHTTP may return no data on the first request — up to EGRESS_RETRY_MAX attempts are made.
  */
 object LimmDiagTest {
 
@@ -44,6 +45,8 @@ object LimmDiagTest {
     private const val SOCKS_WAIT_MAX_MS = 10_000L
     private const val SOCKS_POLL_MS = 150L
     private const val EGRESS_TIMEOUT_SEC = 15L
+    private const val EGRESS_RETRY_MAX = 3
+    private const val EGRESS_RETRY_DELAY_MS = 500L
 
     private fun vpnTransportUp(ctx: Context): Boolean = try {
         val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -180,13 +183,24 @@ object LimmDiagTest {
             }
 
             val t0 = System.currentTimeMillis()
-            val egress = withContext(Dispatchers.IO) { egressViaSocks(socksPort) }
+            // XHTTP может отдать пустой ответ на первый запрос (~15s timeout) — делаем до
+            // EGRESS_RETRY_MAX попыток с паузой между ними.
+            var egress: String? = null
+            for (attempt in 1..EGRESS_RETRY_MAX) {
+                egress = withContext(Dispatchers.IO) { egressViaSocks(socksPort) }
+                if (egress != null) break
+                if (attempt < EGRESS_RETRY_MAX) {
+                    onProgress("    ↻  попытка ${attempt + 1}/$EGRESS_RETRY_MAX…")
+                    Log.d(TAG, "profile $name: egress attempt $attempt failed, retrying")
+                    delay(EGRESS_RETRY_DELAY_MS)
+                }
+            }
             val ms = System.currentTimeMillis() - t0
             val vpnOk = egress == serverIp
             val note = when {
                 egress == serverIp -> "$egress  = VPN ✓  [${ms}ms]"
                 egress != null     -> "$egress  ≠ $serverIp  [${ms}ms]"
-                else               -> "нет ответа от api.ipify.org  [${ms}ms]"
+                else               -> "нет ответа от api.ipify.org  [${ms}ms, $EGRESS_RETRY_MAX попытки]"
             }
             onProgress("    ${if (vpnOk) "✓" else "✗"}  ▸ $name  ($note)")
             Log.i(TAG, "profile $name: egress=$egress expected=$serverIp ok=$vpnOk ms=$ms")
