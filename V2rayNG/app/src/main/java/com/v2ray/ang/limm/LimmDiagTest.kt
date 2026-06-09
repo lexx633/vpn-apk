@@ -123,7 +123,8 @@ object LimmDiagTest {
             return
         }
 
-        if (CoreServiceManager.isRunning() || vpnTransportUp(ctx)) {
+        val wasRunning = CoreServiceManager.isRunning() || vpnTransportUp(ctx)
+        if (wasRunning) {
             onProgress("⏹  Останавливаю VPN…")
             withContext(Dispatchers.Main) { CoreServiceManager.stopVService(ctx) }
             delay(2000)
@@ -226,6 +227,13 @@ object LimmDiagTest {
         // Restore original profile
         if (savedGuid != null) {
             withContext(Dispatchers.Main) { MmkvManager.setSelectServer(savedGuid) }
+        }
+
+        // M1: if the VPN was running when the test started, bring it back up — the test
+        // only restored the selected profile, leaving the service itself off.
+        if (wasRunning) {
+            onProgress("\n▶  Восстанавливаю VPN…")
+            withContext(Dispatchers.Main) { CoreServiceManager.startVService(ctx) }
         }
 
         Log.i(TAG, "=== LIMM DIAG TEST END ===")

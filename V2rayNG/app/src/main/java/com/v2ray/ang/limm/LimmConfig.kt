@@ -4,6 +4,7 @@ import android.content.Context
 import android.provider.Settings
 import com.tencent.mmkv.MMKV
 import com.v2ray.ang.BuildConfig
+import java.net.URLEncoder
 import java.util.UUID
 
 /**
@@ -59,12 +60,14 @@ object LimmConfig {
 
     /** Builds the VLESS+REALITY share link consumed by AngConfigManager.importBatchConfig. */
     fun vlessLink(): String {
+        // L3: URL-encode query values so REALITY params with reserved chars stay valid.
+        fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
         val q = "type=tcp&security=reality" +
-            "&pbk=${BuildConfig.LIMM_REALITY_PBK}" +
-            "&fp=${BuildConfig.LIMM_REALITY_FP}" +
-            "&sni=${BuildConfig.LIMM_REALITY_SNI}" +
-            "&sid=${BuildConfig.LIMM_REALITY_SID}" +
-            "&flow=${BuildConfig.LIMM_REALITY_FLOW}" +
+            "&pbk=${enc(BuildConfig.LIMM_REALITY_PBK)}" +
+            "&fp=${enc(BuildConfig.LIMM_REALITY_FP)}" +
+            "&sni=${enc(BuildConfig.LIMM_REALITY_SNI)}" +
+            "&sid=${enc(BuildConfig.LIMM_REALITY_SID)}" +
+            "&flow=${enc(BuildConfig.LIMM_REALITY_FLOW)}" +
             "&encryption=none"
         return "vless://${BuildConfig.LIMM_VLESS_UUID}@" +
             "${BuildConfig.LIMM_SERVER_IP}:${BuildConfig.LIMM_SERVER_PORT}?$q#limm"

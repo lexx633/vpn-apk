@@ -124,8 +124,9 @@ object LimmSelfUpdater {
         }
         ctx.startActivity(intent)
 
-        // Small delay to let the Intent reach the system before our process dies
-        delay(400)
+        // L4: give the system installer time to start before we die. 400ms was too tight on
+        // slow devices — the ACTION_VIEW could be dropped if our process exited first.
+        delay(2000)
         Log.i(TAG, "Exiting process for clean APK replacement")
         exitProcess(0)
     }

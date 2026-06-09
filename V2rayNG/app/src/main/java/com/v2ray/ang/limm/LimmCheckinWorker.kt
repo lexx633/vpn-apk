@@ -9,6 +9,8 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -35,11 +37,15 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
         // Skip silently if debug mode is off — periodic work may still be in queue from
         // a previous session; this is the cheapest safety net without cancelling the chain.
         if (!com.v2ray.ang.handler.MmkvManager.decodeSettingsBool(com.v2ray.ang.AppConfig.PREF_LIMM_DEBUG, false)) return Result.success()
-        return try {
-            post(runLadder(applicationContext))
-            Result.success()
-        } catch (e: Exception) {
-            Result.retry()
+        // M4: the ladder does blocking OkHttp/Socket/Thread.sleep work; keep it off the
+        // default CoroutineWorker dispatcher to avoid starving the shared pool.
+        return withContext(Dispatchers.IO) {
+            try {
+                post(runLadder(applicationContext))
+                Result.success()
+            } catch (e: Exception) {
+                Result.retry()
+            }
         }
     }
 
@@ -145,7 +151,11 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 } catch (e: Exception) {
                     // swallow and retry
                 }
-                if (attempt < tries - 1) try { Thread.sleep(1500) } catch (e: InterruptedException) {}
+                if (attempt < tries - 1) try { Thread.sleep(1500) } catch (e: InterruptedException) {
+                    // L2: restore interrupt status so worker cancellation propagates.
+                    Thread.currentThread().interrupt()
+                    return false to ""
+                }
             }
             return false to ""
         }

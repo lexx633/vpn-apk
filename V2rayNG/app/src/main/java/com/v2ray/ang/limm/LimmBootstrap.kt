@@ -7,7 +7,6 @@ import com.v2ray.ang.dto.entities.SubscriptionCache
 import com.v2ray.ang.dto.entities.SubscriptionItem
 import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.handler.MmkvManager
-import com.v2ray.ang.handler.SubscriptionUpdater
 import com.v2ray.ang.util.LogUtil
 
 /**
@@ -45,8 +44,10 @@ object LimmBootstrap {
                 updateInterval = 720, // 12h
             )
             MmkvManager.encodeSubscription(SUB_GUID, sub)
-            SubscriptionUpdater.syncOne(ctx, SUB_GUID)
 
+            // M5: single import path. updateConfigViaSub below fetches+imports the subscription;
+            // calling SubscriptionUpdater.syncOne here too imported the same sub in parallel,
+            // risking duplicate/overwritten servers on first launch.
             // First import does network I/O — keep it off the main thread.
             Thread {
                 try {
