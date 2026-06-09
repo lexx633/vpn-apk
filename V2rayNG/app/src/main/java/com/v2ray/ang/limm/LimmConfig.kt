@@ -36,7 +36,7 @@ object LimmConfig {
     val displayVersion: String get() = "${BuildConfig.VERSION_NAME} #${buildTag}"
 
     /** app_version string sent in every check-in/log payload. */
-    val appVersion: String get() = "limm-android-1.2+${BuildConfig.LIMM_BUILD}"
+    val appVersion: String get() = "${BuildConfig.VERSION_NAME}+${buildTag}"
 
     /** True if the build was provided a server UUID (otherwise auto-import/check-in are no-ops). */
     fun isConfigured(): Boolean = BuildConfig.LIMM_VLESS_UUID.isNotEmpty()
