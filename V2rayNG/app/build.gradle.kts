@@ -267,7 +267,7 @@ dependencies {
     // fork fixes it to PREFER_SETTINGS — commit 62ae1ba).
     // JitPack build triggered; if it succeeds the line below activates isAvailable automatically.
     // If JitPack build fails, remove this line and vendor the AAR per the instructions below.
-    implementation("com.github.lexx633:amneziawg-android:62ae1ba17b38bf9f97cdfe9764b317877fb9eaae")
+    implementation("com.github.lexx633:amneziawg-android:09453d3")
 
     // FALLBACK (if JitPack fails): vendor the AAR manually —
     //   1. Clone lexx633/amneziawg-android, run: ./gradlew :tunnel:assembleRelease
