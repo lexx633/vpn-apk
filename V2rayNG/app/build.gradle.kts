@@ -263,28 +263,17 @@ dependencies {
     implementation(libs.multidex)
 
     // --- AmneziaWG (FR1-awg) userspace tunnel ---
-    // STATUS: JitPack coordinate checked (2025-06) — com.github.amnezia-vpn:amneziawg-android:2.0.1
-    // DOES NOT BUILD on JitPack (Kotlin single-quote syntax error in tunnel/build.gradle.kts).
-    // No public Maven coordinate exists. Must use vendored AAR. Steps to wire:
-    //
-    //   1. Clone github.com/amnezia-vpn/amneziawg-android (tag 2.0.1 or latest).
-    //   2. Run: ./gradlew :tunnel:assembleRelease
-    //      Output: tunnel/build/outputs/aar/tunnel-release.aar
-    //   3. Copy tunnel-release.aar → app/libs/amneziawg-tunnel.aar
-    //      (jniLibs.srcDirs already includes "libs", AAR packaging picks it up automatically via
-    //       the fileTree dependency below: implementation(fileTree("libs")["*.aar","*.jar"]))
-    //   4. The AAR bundles libwg-go.so for each ABI. No separate so copy needed.
-    //   5. After adding the AAR, LimmAWGTunnel.isAvailable will return true (class
-    //      org.amnezia.awg.backend.GoBackend becomes resolvable), and FR1-awg enters the active
-    //      ladder automatically.
-    //
-    // NOTE: we only need awgTurnOn(String ifName, int tunFd, String settings): Int and
-    //   awgTurnOff(int handle): void — both are static JNI methods in GoBackend that are
-    //   fd-agnostic and work with our existing CoreVpnService TUN fd (see LimmAWGTunnel.kt).
-    //   We do NOT instantiate GoBackend itself (it would try to own a second VpnService).
-    //
-    // Until the AAR is vendored, LimmAWGTunnel.startTunnel() reflectively no-ops (returns false)
-    // and the ladder safely skips FR1-awg. MSG_STATE_SWITCH_AWG is wired and ready.
+    // Using lexx633/amneziawg-android fork (upstream FAIL_ON_PROJECT_REPOS blocks JitPack;
+    // fork fixes it to PREFER_SETTINGS — commit 62ae1ba).
+    // JitPack build triggered; if it succeeds the line below activates isAvailable automatically.
+    // If JitPack build fails, remove this line and vendor the AAR per the instructions below.
+    implementation("com.github.lexx633:amneziawg-android:62ae1ba17b38bf9f97cdfe9764b317877fb9eaae")
+
+    // FALLBACK (if JitPack fails): vendor the AAR manually —
+    //   1. Clone lexx633/amneziawg-android, run: ./gradlew :tunnel:assembleRelease
+    //   2. Copy tunnel/build/outputs/aar/tunnel-release.aar → app/libs/amneziawg-tunnel.aar
+    //   3. Remove the implementation() line above; fileTree(libs) picks it up automatically.
+    // After either approach LimmAWGTunnel.isAvailable = true and FR1-awg enters the active ladder.
 
     // Testing Libraries
     testImplementation(libs.junit)
