@@ -33,7 +33,7 @@ object LimmFailover {
     private const val TAG = "LimmFailover"
 
     /** Порядок транспортов: первый — предпочтительный, последний — последний резерв. */
-    val TRANSPORT_LADDER = listOf("FR1-xhttp", "FR1-cf", "FR1-hy2", "FR1")
+    val TRANSPORT_LADDER = listOf("FR1-xhttp", "FR1-cf", "FR1-hy2", "FR1-wg", "FR1")
 
     /** Минимальный интервал между переключениями (мс). */
     private const val COOLDOWN_MS = 5 * 60 * 1000L // 5 минут
