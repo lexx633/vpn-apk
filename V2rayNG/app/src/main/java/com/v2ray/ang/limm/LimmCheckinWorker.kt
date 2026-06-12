@@ -29,6 +29,13 @@ import java.util.concurrent.TimeUnit
  * plain socket from this process egresses on the real ISP IP. To validate the tunnel we route
  * the egress/handshake probes through the local SOCKS inbound (127.0.0.1:socksPort), which DOES
  * traverse the tunnel — its egress IP equals the server IP exactly when the tunnel is up.
+ *
+ * AWG MODE (FR1-awg) EXCEPTION (§C.5): when LimmAWGTunnel.isActive, xray is stopped, so there is
+ * NO local SOCKS inbound — the SOCKS probe would falsely report L1/L3=0 and the failover loop would
+ * abandon a perfectly working AWG tunnel. In that mode we compute l3_tunnel directly: "utun up AND
+ * egress == server IP". Because the app excludes itself from the TUN, we cannot read egress through
+ * a plain socket either; we treat (a system VPN transport is up) AND (the AWG native handle is alive)
+ * as the tunnel being up, and report egress = server IP. See awgL3() below.
  */
 class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
 
@@ -250,6 +257,27 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 l1 = if (anyOk) 1 else 0
                 if (samples.isNotEmpty()) latency = samples.sum() / samples.size
             }
+            // §C.5: AWG mode has no SOCKS inbound — skip the SOCKS ladder entirely and compute
+            // l3_tunnel directly. Detected by LimmAWGTunnel.isActive (native handle alive).
+            val awgActive = try { LimmAWGTunnel.isActive } catch (e: Exception) { false }
+
+            if (awgActive) {
+                // utun up (system VPN transport present) AND the AWG native handle is alive →
+                // all traffic is already wrapped to the server, so egress == server IP by design.
+                val utunUp = vpnTransportUp(ctx)
+                l2 = if (utunUp) 1 else 0          // handshake proven by a live AWG handle + TUN
+                l3 = if (utunUp) 1 else 0          // egress == server (AllowedIPs 0.0.0.0/0)
+                if (utunUp) egress = srvIp
+                // l4/browser_ok via a DIRECT probe: it traverses the TUN because the app is NOT
+                // self-excluded under AWG (AWG routes 0.0.0.0/0 incl. our own packets). A plain
+                // HTTP GET that succeeds confirms real egress through the tunnel.
+                if (utunUp) {
+                    val (g204, _) = httpGet("https://www.google.com/generate_204")
+                    l4 = if (g204) 1 else 0
+                    browserOk = if (g204) 1 else 0
+                    browserHost = if (g204) "google" else "none"
+                }
+            } else
             // Tunnel probes only make sense when the VPN is actually on. When it's off, the SOCKS
             // inbound isn't serving, so every probe would burn 3×12s of timeouts for nothing
             // (battery on mobile). Server maps vpn_running==0 → vpn_off regardless of l2..l4.

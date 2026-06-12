@@ -54,6 +54,27 @@ android {
         buildConfigField("String", "LIMM_COLLECTOR_URL", "\"https://limm.space\"")
         buildConfigField("String", "LIMM_BUILD", "\"${limmBuildHash}\"")
 
+        // --- AmneziaWG (FR1-awg) transport ---
+        // Secret: the AWG client private key is baked from limm.properties (CI injects it from
+        // the AWG_CLIENT_PRIVKEY build secret, mirrored from C:\_vpn\.env). NEVER commit the key —
+        // limm.properties is gitignored, exactly like LIMM_TOKEN / LIMM_VLESS_UUID above.
+        buildConfigField("String", "LIMM_AWG_PRIVKEY", "\"${limm("AWG_CLIENT_PRIVKEY")}\"")
+        // Non-secret AWG params (server pubkey, endpoint, address, obfuscation Jc/Jmin/Jmax/S1/S2/H1-H4).
+        // Mirrors C:\_vpn\client\awg-fr1.conf — safe to bake in clear (they match the server side).
+        buildConfigField("String", "LIMM_AWG_SERVER_PUBKEY", "\"VK14+twr8V7X5hCDhHwYI4pGAMJ8pmNV0L0Xvm+6D1w=\"")
+        buildConfigField("String", "LIMM_AWG_ENDPOINT", "\"45.95.175.170:51820\"")
+        buildConfigField("String", "LIMM_AWG_ADDRESS", "\"10.8.0.2/24\"")
+        buildConfigField("String", "LIMM_AWG_DNS", "\"1.1.1.1\"")
+        buildConfigField("String", "LIMM_AWG_JC", "\"4\"")
+        buildConfigField("String", "LIMM_AWG_JMIN", "\"40\"")
+        buildConfigField("String", "LIMM_AWG_JMAX", "\"70\"")
+        buildConfigField("String", "LIMM_AWG_S1", "\"0\"")
+        buildConfigField("String", "LIMM_AWG_S2", "\"0\"")
+        buildConfigField("String", "LIMM_AWG_H1", "\"601260931\"")
+        buildConfigField("String", "LIMM_AWG_H2", "\"578771134\"")
+        buildConfigField("String", "LIMM_AWG_H3", "\"1732336072\"")
+        buildConfigField("String", "LIMM_AWG_H4", "\"2588686224\"")
+
         val abiFilterList = (properties["ABI_FILTERS"] as? String)?.split(';')
         splits {
             abi {
@@ -240,6 +261,22 @@ dependencies {
 
     // Multidex Support
     implementation(libs.multidex)
+
+    // --- AmneziaWG (FR1-awg) userspace tunnel ---
+    // TODO(awg): wire the amneziawg-android "tunnel" library so LimmAWGTunnel can call
+    //   org.amnezia.awg.backend.GoBackend natives (awgTurnOn/awgTurnOff/awgGetConfig) and reuse
+    //   the existing CoreVpnService TUN fd. The library is NOT on a public Maven we can pin here.
+    //   Pick ONE of these and replace this TODO with the concrete wiring:
+    //     A) Vendored JNI: drop the prebuilt libwg-go.so + the org.amnezia.awg.* Java sources into
+    //        app/libs (jniLibs.srcDirs already includes "libs") and import them directly. The
+    //        native symbol loaded by GoBackend is SharedLibraryLoader.loadSharedLibrary(ctx,"wg-go").
+    //     B) AAR from a build of github.com/amnezia-vpn/amneziawg-android :tunnel module, published
+    //        to a private/local maven, e.g.:
+    //            implementation("org.amnezia.awg:tunnel:<VERSION>")   // coordinate UNVERIFIED
+    //   NOTE: amneziawg-android's GoBackend insists on its own android.net.VpnService; we only need
+    //   the *native* awgTurnOn(name, int fd, goConfig) which is fd-agnostic — see LimmAWGTunnel.kt.
+    //   Until this is resolved LimmAWGTunnel.startTunnel() reflectively no-ops (returns false) so the
+    //   ladder safely skips FR1-awg instead of crashing. Do NOT ship FR1-awg active until wired.
 
     // Testing Libraries
     testImplementation(libs.junit)
