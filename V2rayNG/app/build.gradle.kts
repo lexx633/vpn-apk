@@ -263,17 +263,11 @@ dependencies {
     implementation(libs.multidex)
 
     // --- AmneziaWG (FR1-awg) userspace tunnel ---
-    // Using lexx633/amneziawg-android fork (upstream FAIL_ON_PROJECT_REPOS blocks JitPack;
-    // fork fixes it to PREFER_SETTINGS — commit 62ae1ba).
-    // JitPack build triggered; if it succeeds the line below activates isAvailable automatically.
-    // If JitPack build fails, remove this line and vendor the AAR per the instructions below.
-    implementation("com.github.lexx633:amneziawg-android:09453d3")
-
-    // FALLBACK (if JitPack fails): vendor the AAR manually —
-    //   1. Clone lexx633/amneziawg-android, run: ./gradlew :tunnel:assembleRelease
-    //   2. Copy tunnel/build/outputs/aar/tunnel-release.aar → app/libs/amneziawg-tunnel.aar
-    //   3. Remove the implementation() line above; fileTree(libs) picks it up automatically.
-    // After either approach LimmAWGTunnel.isAvailable = true and FR1-awg enters the active ladder.
+    // AAR vendored from lexx633/amneziawg-android release aar-6ee4fe1 (built via GitHub Actions).
+    // File: app/libs/amneziawg-tunnel.aar (gitignored binary, 5.8 MB with arm64/armeabi-v7a .so).
+    // fileTree("libs") above picks it up automatically — no separate implementation() needed.
+    // To update: gh release download <tag> --repo lexx633/amneziawg-android --pattern "amneziawg-tunnel.aar" --dir app/libs/
+    // LimmAWGTunnel.isAvailable = true once this AAR is present → FR1-awg enters the active ladder.
 
     // Testing Libraries
     testImplementation(libs.junit)
