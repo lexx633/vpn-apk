@@ -41,9 +41,6 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
 
     override suspend fun doWork(): Result {
         if (!LimmConfig.isConfigured() || LimmConfig.token.isEmpty()) return Result.success()
-        // Skip silently if debug mode is off — periodic work may still be in queue from
-        // a previous session; this is the cheapest safety net without cancelling the chain.
-        if (!com.v2ray.ang.handler.MmkvManager.decodeSettingsBool(com.v2ray.ang.AppConfig.PREF_LIMM_DEBUG, false)) return Result.success()
         // M4: the ladder does blocking OkHttp/Socket/Thread.sleep work; keep it off the
         // default CoroutineWorker dispatcher to avoid starving the shared pool.
         return withContext(Dispatchers.IO) {
@@ -69,19 +66,9 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
     companion object {
         private const val UNIQUE = "limm_checkin"
 
-        /** Schedules the periodic check-in (min interval enforced by Android is 15 min).
-         *  Does nothing (and cancels any existing work) when debug mode is off. */
+        /** Schedules the periodic check-in (min interval enforced by Android is 15 min). */
         fun schedule(ctx: Context) {
             if (!LimmConfig.isConfigured()) return
-            val debugMode = com.v2ray.ang.handler.MmkvManager.decodeSettingsBool(
-                com.v2ray.ang.AppConfig.PREF_LIMM_DEBUG, false
-            )
-            if (!debugMode) {
-                // Cancel periodic work so check-ins stop when debug is off
-                WorkManager.getInstance(ctx).cancelUniqueWork(UNIQUE)
-                WorkManager.getInstance(ctx).cancelUniqueWork("${UNIQUE}_now")
-                return
-            }
             val req = PeriodicWorkRequestBuilder<LimmCheckinWorker>(15, TimeUnit.MINUTES).build()
             WorkManager.getInstance(ctx)
                 .enqueueUniquePeriodicWork(UNIQUE, ExistingPeriodicWorkPolicy.KEEP, req)
