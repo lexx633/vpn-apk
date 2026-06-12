@@ -1,5 +1,6 @@
 package com.v2ray.ang.fmt
 
+import android.util.Base64
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.enums.EConfigType
@@ -40,7 +41,7 @@ object Hysteria2Fmt : FmtBase() {
             if (config.portHopping.isNotNullEmpty()) {
                 config.portHoppingInterval = queryParam["mportHopInt"]
             }
-            config.pinnedCA256 = queryParam["pinSHA256"]
+            config.pinnedCA256 = queryParam["pinSHA256"]?.let { pinSHA256ToHex(it) }
 
         }
 
@@ -106,5 +107,19 @@ object Hysteria2Fmt : FmtBase() {
         }
 
         return toUri(config, config.password, dicQuery)
+    }
+
+    // Xray-core requires pinnedPeerCertSha256 as lowercase hex (encoding/hex.DecodeString).
+    // Hysteria2 URIs carry pinSHA256 as base64. Convert if needed; keep as-is if already hex.
+    private fun pinSHA256ToHex(value: String): String {
+        if (value.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+            return value.lowercase()
+        }
+        return try {
+            val bytes = Base64.decode(value, Base64.DEFAULT or Base64.URL_SAFE or Base64.NO_PADDING)
+            if (bytes.size == 32) bytes.joinToString("") { "%02x".format(it) } else value
+        } catch (_: Exception) {
+            value
+        }
     }
 }
