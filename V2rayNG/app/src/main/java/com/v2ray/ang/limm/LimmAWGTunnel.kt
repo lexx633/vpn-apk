@@ -1,6 +1,7 @@
 package com.v2ray.ang.limm
 
 import android.content.Context
+import android.util.Base64
 import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.util.LogUtil
 
@@ -78,14 +79,15 @@ object LimmAWGTunnel {
      * directly from BuildConfig without importing the config parser. Keys are hex/base64 as the
      * userspace API requires; AmneziaWG obfuscation params are appended on the interface section.
      *
-     * NOTE: awgTurnOn wants the *base64* keys converted to the userspace `private_key=<hex>` form in
-     * some forks. amneziawg-go accepts base64 in the high-level config and hex in raw UAPI — the
-     * exact expectation MUST be confirmed against the wired library version (see open questions in
-     * the commit message). Left as base64 here matching awg-fr1.conf; adjust on wiring if needed.
+     * WireGuard UAPI (and amneziawg-go) require keys as lowercase hex, not base64.
+     * BuildConfig bakes them as base64 (from limm.properties/CI secret) → convert here.
      */
+    private fun String.b64toHex(): String =
+        Base64.decode(this, Base64.DEFAULT).joinToString("") { "%02x".format(it) }
+
     private fun buildUapiConfig(): String {
-        val priv = BuildConfig.LIMM_AWG_PRIVKEY
-        val peerPub = BuildConfig.LIMM_AWG_SERVER_PUBKEY
+        val priv = BuildConfig.LIMM_AWG_PRIVKEY.b64toHex()
+        val peerPub = BuildConfig.LIMM_AWG_SERVER_PUBKEY.b64toHex()
         val endpoint = BuildConfig.LIMM_AWG_ENDPOINT
         // UAPI uses snake_case keys; AmneziaWG adds jc/jmin/jmax/s1/s2/h1..h4 on the interface.
         return buildString {
