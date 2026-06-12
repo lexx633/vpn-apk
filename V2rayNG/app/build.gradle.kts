@@ -263,20 +263,28 @@ dependencies {
     implementation(libs.multidex)
 
     // --- AmneziaWG (FR1-awg) userspace tunnel ---
-    // TODO(awg): wire the amneziawg-android "tunnel" library so LimmAWGTunnel can call
-    //   org.amnezia.awg.backend.GoBackend natives (awgTurnOn/awgTurnOff/awgGetConfig) and reuse
-    //   the existing CoreVpnService TUN fd. The library is NOT on a public Maven we can pin here.
-    //   Pick ONE of these and replace this TODO with the concrete wiring:
-    //     A) Vendored JNI: drop the prebuilt libwg-go.so + the org.amnezia.awg.* Java sources into
-    //        app/libs (jniLibs.srcDirs already includes "libs") and import them directly. The
-    //        native symbol loaded by GoBackend is SharedLibraryLoader.loadSharedLibrary(ctx,"wg-go").
-    //     B) AAR from a build of github.com/amnezia-vpn/amneziawg-android :tunnel module, published
-    //        to a private/local maven, e.g.:
-    //            implementation("org.amnezia.awg:tunnel:<VERSION>")   // coordinate UNVERIFIED
-    //   NOTE: amneziawg-android's GoBackend insists on its own android.net.VpnService; we only need
-    //   the *native* awgTurnOn(name, int fd, goConfig) which is fd-agnostic — see LimmAWGTunnel.kt.
-    //   Until this is resolved LimmAWGTunnel.startTunnel() reflectively no-ops (returns false) so the
-    //   ladder safely skips FR1-awg instead of crashing. Do NOT ship FR1-awg active until wired.
+    // STATUS: JitPack coordinate checked (2025-06) — com.github.amnezia-vpn:amneziawg-android:2.0.1
+    // DOES NOT BUILD on JitPack (Kotlin single-quote syntax error in tunnel/build.gradle.kts).
+    // No public Maven coordinate exists. Must use vendored AAR. Steps to wire:
+    //
+    //   1. Clone github.com/amnezia-vpn/amneziawg-android (tag 2.0.1 or latest).
+    //   2. Run: ./gradlew :tunnel:assembleRelease
+    //      Output: tunnel/build/outputs/aar/tunnel-release.aar
+    //   3. Copy tunnel-release.aar → app/libs/amneziawg-tunnel.aar
+    //      (jniLibs.srcDirs already includes "libs", AAR packaging picks it up automatically via
+    //       the fileTree dependency below: implementation(fileTree("libs")["*.aar","*.jar"]))
+    //   4. The AAR bundles libwg-go.so for each ABI. No separate so copy needed.
+    //   5. After adding the AAR, LimmAWGTunnel.isAvailable will return true (class
+    //      org.amnezia.awg.backend.GoBackend becomes resolvable), and FR1-awg enters the active
+    //      ladder automatically.
+    //
+    // NOTE: we only need awgTurnOn(String ifName, int tunFd, String settings): Int and
+    //   awgTurnOff(int handle): void — both are static JNI methods in GoBackend that are
+    //   fd-agnostic and work with our existing CoreVpnService TUN fd (see LimmAWGTunnel.kt).
+    //   We do NOT instantiate GoBackend itself (it would try to own a second VpnService).
+    //
+    // Until the AAR is vendored, LimmAWGTunnel.startTunnel() reflectively no-ops (returns false)
+    // and the ladder safely skips FR1-awg. MSG_STATE_SWITCH_AWG is wired and ready.
 
     // Testing Libraries
     testImplementation(libs.junit)

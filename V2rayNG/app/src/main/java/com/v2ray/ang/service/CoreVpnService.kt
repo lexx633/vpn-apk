@@ -239,6 +239,16 @@ class CoreVpnService : VpnService(), ServiceControl {
         return protect(socket)
     }
 
+    /**
+     * Returns the raw fd of the established TUN ParcelFileDescriptor.
+     * Called by CoreServiceManager when handling MSG_STATE_SWITCH_AWG so that
+     * LimmAWGTunnel can reuse the existing TUN interface instead of opening a new VpnService.
+     * The fd remains owned by [mInterface]; callers must NOT close it.
+     */
+    override fun getTunFd(): Int {
+        return if (::mInterface.isInitialized) mInterface.fd else -1
+    }
+
     override fun attachBaseContext(newBase: Context?) {
         val context = newBase?.let {
             MyContextWrapper.wrap(newBase, SettingsManager.getLocale())

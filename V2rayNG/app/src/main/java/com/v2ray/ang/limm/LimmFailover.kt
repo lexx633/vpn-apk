@@ -174,22 +174,23 @@ object LimmFailover {
     /**
      * §C.4 — переход НА AmneziaWG внутри того же VpnService.
      *
-     * Здесь только посылается КОМАНДА сервису сменить режим туннеля; сам захват существующего
-     * TUN-fd и остановка xray-ядра выполняются в CoreVpnService (он владеет mInterface). Это
-     * требует нового сообщения сервису (напр. MSG_STATE_SWITCH_AWG) и обработчика, который:
+     * Посылает MSG_STATE_SWITCH_AWG сервису. Обработчик в CoreServiceManager.ReceiveMessageHandler:
      *   1) останавливает xray-ядро (CoreServiceManager.stopCoreLoop), НЕ закрывая mInterface;
-     *   2) зовёт LimmAWGTunnel.startTunnel(ctx, mInterface.fd).
-     * Пока этот канал/обработчик не реализован (см. open questions), метод возвращает false и
-     * автолестница безопасно НЕ уходит на AWG.
+     *   2) читает tunFd через ServiceControl.getTunFd() (реализован в CoreVpnService);
+     *   3) зовёт LimmAWGTunnel.startTunnel(ctx, tunFd).
      *
-     * TODO(awg-handover): добавить MSG_STATE_SWITCH_AWG в AppConfig + обработку в CoreVpnService;
-     *   до этого FR1-awg в авто-режиме недостижим (но код пути готов).
+     * Метод возвращает true сразу после постановки команды в очередь — реальный результат
+     * асинхронен (CoreServiceManager обрабатывает сообщение в ReceiveMessageHandler). Если
+     * AWG-бэкенд недоступен — отказываемся немедленно, не постав команду.
      */
     private fun switchToAwg(ctx: Context): Boolean {
-        if (!LimmAWGTunnel.isAvailable) return false
-        // Канал handover fd сервису ещё не реализован — безопасно отказываемся.
-        LogUtil.w(TAG, "switchToAwg: TUN-fd handover в CoreVpnService ещё не реализован (TODO)")
-        return false
+        if (!LimmAWGTunnel.isAvailable) {
+            LogUtil.w(TAG, "switchToAwg: AWG-бэкенд недоступен (AAR не слинкован) — пропускаем")
+            return false
+        }
+        LogUtil.i(TAG, "switchToAwg: отправляем MSG_STATE_SWITCH_AWG сервису")
+        MessageUtil.sendMsg2Service(ctx, AppConfig.MSG_STATE_SWITCH_AWG, "")
+        return true
     }
 
     /**

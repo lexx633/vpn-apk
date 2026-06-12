@@ -166,6 +166,8 @@ object AppConfig {
     const val MSG_STATE_STOP = 4
     const val MSG_STATE_STOP_SUCCESS = 41
     const val MSG_STATE_RESTART = 5
+    /** Switch the active tunnel to AmneziaWG without closing the TUN fd (FR1-awg failover path). */
+    const val MSG_STATE_SWITCH_AWG = 51
     const val MSG_MEASURE_DELAY = 6
     const val MSG_MEASURE_DELAY_SUCCESS = 61
     const val MSG_MEASURE_CONFIG_START = 7
