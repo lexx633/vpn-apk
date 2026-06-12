@@ -87,20 +87,21 @@ object LimmAWGTunnel {
 
     private fun buildUapiConfig(): String {
         val priv = BuildConfig.LIMM_AWG_PRIVKEY.b64toHex()
-        val peerPub = BuildConfig.LIMM_AWG_SERVER_PUBKEY.b64toHex()
-        val endpoint = BuildConfig.LIMM_AWG_ENDPOINT
+        // Server-side params resolved via LimmRemoteConfig (MMKV cache → BuildConfig fallback).
+        val peerPub = LimmRemoteConfig.awgServerPubkey.b64toHex()
+        val endpoint = LimmRemoteConfig.awgEndpoint
         // UAPI uses snake_case keys; AmneziaWG adds jc/jmin/jmax/s1/s2/h1..h4 on the interface.
         return buildString {
             append("private_key=").append(priv).append('\n')
-            append("jc=").append(BuildConfig.LIMM_AWG_JC).append('\n')
-            append("jmin=").append(BuildConfig.LIMM_AWG_JMIN).append('\n')
-            append("jmax=").append(BuildConfig.LIMM_AWG_JMAX).append('\n')
-            append("s1=").append(BuildConfig.LIMM_AWG_S1).append('\n')
-            append("s2=").append(BuildConfig.LIMM_AWG_S2).append('\n')
-            append("h1=").append(BuildConfig.LIMM_AWG_H1).append('\n')
-            append("h2=").append(BuildConfig.LIMM_AWG_H2).append('\n')
-            append("h3=").append(BuildConfig.LIMM_AWG_H3).append('\n')
-            append("h4=").append(BuildConfig.LIMM_AWG_H4).append('\n')
+            append("jc=").append(LimmRemoteConfig.awgJc).append('\n')
+            append("jmin=").append(LimmRemoteConfig.awgJmin).append('\n')
+            append("jmax=").append(LimmRemoteConfig.awgJmax).append('\n')
+            append("s1=").append(LimmRemoteConfig.awgS1).append('\n')
+            append("s2=").append(LimmRemoteConfig.awgS2).append('\n')
+            append("h1=").append(LimmRemoteConfig.awgH1).append('\n')
+            append("h2=").append(LimmRemoteConfig.awgH2).append('\n')
+            append("h3=").append(LimmRemoteConfig.awgH3).append('\n')
+            append("h4=").append(LimmRemoteConfig.awgH4).append('\n')
             append("replace_peers=true").append('\n')
             append("public_key=").append(peerPub).append('\n')
             append("endpoint=").append(endpoint).append('\n')

@@ -48,6 +48,10 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
         // default CoroutineWorker dispatcher to avoid starving the shared pool.
         return withContext(Dispatchers.IO) {
             try {
+                // Refresh remote server config if stale (> 24 h or first run).
+                // On success, LimmConfig/LimmAWGTunnel pick up new params for the next connection.
+                if (LimmRemoteConfig.isStale()) LimmRemoteConfig.refresh()
+
                 val payload = runLadder(applicationContext)
                 post(payload)
                 // Автоматическое переключение транспорта при деградации туннеля.

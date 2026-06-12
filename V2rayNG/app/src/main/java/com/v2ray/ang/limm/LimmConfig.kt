@@ -10,7 +10,8 @@ import java.util.UUID
 /**
  * limm VPN — central config for the embedded server profile and the monitoring check-in.
  * Secrets (UUID/token) arrive via BuildConfig from the gitignored limm.properties.
- * Non-secret REALITY params are baked at build time too.
+ * Non-secret server params (IP, REALITY keys, AWG endpoint) come from [LimmRemoteConfig]
+ * which fetches server-config.json and caches in MMKV — BuildConfig is the offline fallback.
  */
 object LimmConfig {
     private const val MMKV_ID = "limm"
@@ -20,8 +21,9 @@ object LimmConfig {
 
     val collectorUrl: String get() = BuildConfig.LIMM_COLLECTOR_URL.trimEnd('/')
     val token: String get() = BuildConfig.LIMM_TOKEN
-    val serverIp: String get() = BuildConfig.LIMM_SERVER_IP
-    val serverName: String get() = BuildConfig.LIMM_SERVER_NAME
+    /** Resolved via LimmRemoteConfig (MMKV cache → BuildConfig fallback). */
+    val serverIp: String get() = LimmRemoteConfig.serverIp
+    val serverName: String get() = LimmRemoteConfig.serverName
 
     /** Friendly device label for the dashboard; empty falls back to "android-<model>". */
     val label: String get() = BuildConfig.LIMM_LABEL
@@ -58,18 +60,19 @@ object LimmConfig {
         return v
     }
 
-    /** Builds the VLESS+REALITY share link consumed by AngConfigManager.importBatchConfig. */
+    /** Builds the VLESS+REALITY share link consumed by AngConfigManager.importBatchConfig.
+     *  Server params resolved via LimmRemoteConfig (MMKV → BuildConfig fallback). */
     fun vlessLink(): String {
         // L3: URL-encode query values so REALITY params with reserved chars stay valid.
         fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
         val q = "type=tcp&security=reality" +
-            "&pbk=${enc(BuildConfig.LIMM_REALITY_PBK)}" +
-            "&fp=${enc(BuildConfig.LIMM_REALITY_FP)}" +
-            "&sni=${enc(BuildConfig.LIMM_REALITY_SNI)}" +
-            "&sid=${enc(BuildConfig.LIMM_REALITY_SID)}" +
-            "&flow=${enc(BuildConfig.LIMM_REALITY_FLOW)}" +
+            "&pbk=${enc(LimmRemoteConfig.realityPbk)}" +
+            "&fp=${enc(LimmRemoteConfig.realityFp)}" +
+            "&sni=${enc(LimmRemoteConfig.realitySni)}" +
+            "&sid=${enc(LimmRemoteConfig.realitySid)}" +
+            "&flow=${enc(LimmRemoteConfig.realityFlow)}" +
             "&encryption=none"
         return "vless://${BuildConfig.LIMM_VLESS_UUID}@" +
-            "${BuildConfig.LIMM_SERVER_IP}:${BuildConfig.LIMM_SERVER_PORT}?$q#limm"
+            "${LimmRemoteConfig.serverIp}:${LimmRemoteConfig.serverPort}?$q#limm"
     }
 }

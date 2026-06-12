@@ -35,19 +35,19 @@ android {
         applicationId = "space.limm.vpn"
         minSdk = 24
         targetSdk = 37
-        versionCode = 765
-        versionName = "2.2.3.41"
+        versionCode = 766
+        versionName = "2.2.3.42"
         multiDexEnabled = true
 
         // limm VPN config — non-secret REALITY params baked, secrets from limm.properties
         buildConfigField("String", "LIMM_VLESS_UUID", "\"${limm("LIMM_VLESS_UUID")}\"")
         buildConfigField("String", "LIMM_TOKEN", "\"${limm("LIMM_TOKEN")}\"")
-        buildConfigField("String", "LIMM_SERVER_IP", "\"45.95.175.170\"")
+        buildConfigField("String", "LIMM_SERVER_IP", "\"77.90.52.123\"")
         buildConfigField("String", "LIMM_SERVER_PORT", "\"443\"")
-        buildConfigField("String", "LIMM_SERVER_NAME", "\"fr-racknerd-1\"")
+        buildConfigField("String", "LIMM_SERVER_NAME", "\"de1-skrime\"")
         buildConfigField("String", "LIMM_LABEL", "\"${limm("LIMM_LABEL")}\"")
-        buildConfigField("String", "LIMM_REALITY_PBK", "\"2phZxEOsUqe42vGgY31ak5XE1-RPCnPjhYl1w35D0Sw\"")
-        buildConfigField("String", "LIMM_REALITY_SNI", "\"apple.com\"")
+        buildConfigField("String", "LIMM_REALITY_PBK", "\"znXvmpAIvstY45kp0ERqf6zweh_wWZyiN8tg90dFTWc\"")
+        buildConfigField("String", "LIMM_REALITY_SNI", "\"www.microsoft.com\"")
         buildConfigField("String", "LIMM_REALITY_SID", "\"${limm("LIMM_REALITY_SID")}\"")
         buildConfigField("String", "LIMM_REALITY_FLOW", "\"xtls-rprx-vision\"")
         buildConfigField("String", "LIMM_REALITY_FP", "\"chrome\"")
@@ -61,8 +61,8 @@ android {
         buildConfigField("String", "LIMM_AWG_PRIVKEY", "\"${limm("AWG_CLIENT_PRIVKEY")}\"")
         // Non-secret AWG params (server pubkey, endpoint, address, obfuscation Jc/Jmin/Jmax/S1/S2/H1-H4).
         // Mirrors C:\_vpn\client\awg-fr1.conf — safe to bake in clear (they match the server side).
-        buildConfigField("String", "LIMM_AWG_SERVER_PUBKEY", "\"VK14+twr8V7X5hCDhHwYI4pGAMJ8pmNV0L0Xvm+6D1w=\"")
-        buildConfigField("String", "LIMM_AWG_ENDPOINT", "\"45.95.175.170:51820\"")
+        buildConfigField("String", "LIMM_AWG_SERVER_PUBKEY", "\"CwvRZhMOWyvQj4UOmOhOHJvcS/p/DaFx/1qTPzdAqmw=\"")
+        buildConfigField("String", "LIMM_AWG_ENDPOINT", "\"77.90.52.123:51820\"")
         buildConfigField("String", "LIMM_AWG_ADDRESS", "\"10.8.0.2/24\"")
         buildConfigField("String", "LIMM_AWG_DNS", "\"1.1.1.1\"")
         buildConfigField("String", "LIMM_AWG_JC", "\"4\"")
