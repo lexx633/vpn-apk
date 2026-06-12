@@ -41,7 +41,13 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
         // default CoroutineWorker dispatcher to avoid starving the shared pool.
         return withContext(Dispatchers.IO) {
             try {
-                post(runLadder(applicationContext))
+                val payload = runLadder(applicationContext)
+                post(payload)
+                // Автоматическое переключение транспорта при деградации туннеля.
+                // l3_tunnel == 1 означает, что egress IP совпадает с серверным → туннель работает.
+                val l3ok = payload.optInt("l3_tunnel", -1) == 1
+                val vpnRunning = payload.optInt("vpn_running", 0) == 1
+                LimmFailover.evaluate(applicationContext, l3ok, vpnRunning)
                 Result.success()
             } catch (e: Exception) {
                 Result.retry()
