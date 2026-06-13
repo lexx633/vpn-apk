@@ -15,11 +15,15 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.R
+import com.v2ray.ang.core.CoreServiceManager
+import com.v2ray.ang.handler.SettingsManager
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
 /**
@@ -53,10 +57,18 @@ class LimmUpdateWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
         }
 
         private fun checkAndUpdate(ctx: Context) {
-            val client = OkHttpClient.Builder()
+            // Route via the tunnel's SOCKS when the core is up — the app is excluded from its own
+            // VPN, so direct HTTP to limm.space (CF) is blocked on censored ISPs (hang at 0%).
+            val builder = OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(30, TimeUnit.SECONDS)
-                .build()
+            if (CoreServiceManager.isRunning()) {
+                val socksPort = try { SettingsManager.getSocksPort() } catch (e: Exception) { 0 }
+                if (socksPort > 0) {
+                    builder.proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort)))
+                }
+            }
+            val client = builder.build()
 
             val resp = client.newCall(
                 Request.Builder().url("${LimmConfig.collectorUrl}/vpn/apk/latest")

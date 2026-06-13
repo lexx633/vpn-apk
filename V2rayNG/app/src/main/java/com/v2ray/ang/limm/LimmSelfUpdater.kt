@@ -6,12 +6,15 @@ import android.net.Uri
 import android.util.Log
 import androidx.core.content.FileProvider
 import com.v2ray.ang.core.CoreServiceManager
+import com.v2ray.ang.handler.SettingsManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.util.concurrent.TimeUnit
 import kotlin.system.exitProcess
 
@@ -44,10 +47,21 @@ object LimmSelfUpdater {
         onProgress: (Int) -> Unit
     ): File? = withContext(Dispatchers.IO) {
         Log.i(TAG, "Downloading APK: $apkUrl")
-        val client = OkHttpClient.Builder()
+        // The app is excluded from its OWN VpnService (loop-avoidance), so its DIRECT HTTP to
+        // limm.space (Cloudflare) is blocked on censored ISPs → download hangs at 0% even with the
+        // VPN up (that's why "via browser" works — the browser isn't excluded). Route the download
+        // through the local SOCKS inbound so it rides the tunnel. Core off → direct (only option).
+        val builder = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
-            .build()
+        if (CoreServiceManager.isRunning()) {
+            val socksPort = try { SettingsManager.getSocksPort() } catch (e: Exception) { 0 }
+            if (socksPort > 0) {
+                builder.proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort)))
+                Log.i(TAG, "Download via tunnel SOCKS 127.0.0.1:$socksPort")
+            }
+        }
+        val client = builder.build()
 
         val dest = File(ctx.cacheDir, APK_CACHE_NAME)
         val tmp = File(ctx.cacheDir, "$APK_CACHE_NAME.tmp")
