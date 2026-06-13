@@ -21,6 +21,7 @@ import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.contracts.ServiceControl
 import com.v2ray.ang.contracts.Tun2SocksControl
 import com.v2ray.ang.core.CoreServiceManager
+import com.v2ray.ang.limm.LimmAWGTunnel
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.NotificationManager
 import com.v2ray.ang.handler.SettingsManager
@@ -120,7 +121,30 @@ class CoreVpnService : VpnService(), ServiceControl {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         LogUtil.i(AppConfig.TAG, "StartCore-VPN: Service command received")
+
+        // AWG switch via startService(Intent) — runs in THIS (daemon) process where the TUN fd
+        // lives. Reliable cross-process, unlike sendBroadcast (E-090). Per-node config arrives in
+        // extras because LimmAWGTunnel.pendingConfig set in the UI process is invisible here.
+        if (intent?.action == AppConfig.ACTION_SWITCH_AWG) {
+            val ep = intent.getStringExtra("awg_endpoint").orEmpty()
+            val priv = intent.getStringExtra("awg_priv").orEmpty()
+            val peer = intent.getStringExtra("awg_peer").orEmpty()
+            if (ep.isNotEmpty() && priv.isNotEmpty() && peer.isNotEmpty()) {
+                LimmAWGTunnel.pendingConfig = LimmAWGTunnel.AwgConfig(ep, priv, peer)
+            }
+            LogUtil.i("LimmAWGTunnel", "onStartCommand: ACTION_SWITCH_AWG (ep=$ep)")
+            CoreServiceManager.switchToAwgNow()
+            return START_STICKY
+        }
+
         NotificationManager.showNotification(null)
+        // If an AWG userspace tunnel is up (from a prior ACTION_SWITCH_AWG), stop it before
+        // re-establishing xray — otherwise wg-go keeps the old fd and conflicts. Runs in the
+        // daemon process, so LimmAWGTunnel.isActive is authoritative here.
+        if (LimmAWGTunnel.isActive) {
+            LogUtil.i("LimmAWGTunnel", "onStartCommand: stopping active AWG before xray start")
+            LimmAWGTunnel.stopTunnel()
+        }
         if (SettingsManager.isUsingHevTun()) {
             // hev-tun mode: xray uses tunFd=0 (SOCKS-only), hev-tun bridges TUN→SOCKS.
             // Pre-start xray in background so SOCKS is ready before TUN is established —

@@ -91,6 +91,9 @@ object AppConfig {
     /** Broadcast actions. */
     const val BROADCAST_ACTION_SERVICE = "$ANG_PACKAGE.action.service"
     const val BROADCAST_ACTION_ACTIVITY = "$ANG_PACKAGE.action.activity"
+    // AWG switch via startService(Intent) — onStartCommand is delivered reliably cross-process,
+    // unlike sendBroadcast (MSG_STATE_SWITCH_AWG never reached the daemon receiver — E-090).
+    const val ACTION_SWITCH_AWG = "$ANG_PACKAGE.action.switch_awg"
     const val BROADCAST_ACTION_WIDGET_CLICK = "$ANG_PACKAGE.action.widget.click"
 
     /** Tasker extras. */

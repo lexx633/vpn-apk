@@ -110,6 +110,36 @@ object CoreServiceManager {
     }
 
     /**
+     * Bring up AmneziaWG on the live TUN fd of the running VpnService (xray stopped, AWG takes the fd).
+     * Runs in the service (daemon) process — call from CoreVpnService.onStartCommand (ACTION_SWITCH_AWG)
+     * or the MSG_STATE_SWITCH_AWG broadcast handler. Per-node config must already be in
+     * LimmAWGTunnel.pendingConfig of THIS process (set from the Intent extras in onStartCommand).
+     */
+    fun switchToAwgNow() {
+        val sc = serviceControl?.get() ?: run {
+            LogUtil.e("LimmAWGTunnel", "switchToAwgNow: no serviceControl (service not bound)")
+            return
+        }
+        LogUtil.i("LimmAWGTunnel", "switchToAwgNow: begin")
+        val tunFd = sc.getTunFd()
+        if (tunFd < 0) {
+            LogUtil.e("LimmAWGTunnel", "switchToAwgNow: No TUN fd — aborted (not in VPN mode?)")
+            return
+        }
+        // Stop xray loop but keep mInterface (the TUN fd) alive; AWG userspace takes it over.
+        stopCoreLoop()
+        Thread.sleep(200L)
+        val started = LimmAWGTunnel.startTunnel(sc.getService().applicationContext, tunFd)
+        if (started) {
+            LogUtil.i("LimmAWGTunnel", "switchToAwgNow: AWG tunnel UP on fd=$tunFd")
+            NotificationManager.showNotification(null)
+        } else {
+            LogUtil.e("LimmAWGTunnel", "switchToAwgNow: AWG failed to start — restarting xray")
+            startVService(sc.getService())
+        }
+    }
+
+    /**
      * Checks if the V2Ray service is running.
      * @return True if the service is running, false otherwise.
      */
@@ -528,31 +558,9 @@ object CoreServiceManager {
                 }
 
                 AppConfig.MSG_STATE_SWITCH_AWG -> {
-                    // FR1-awg failover path: stop xray-core while keeping the TUN fd alive,
-                    // then hand the fd to LimmAWGTunnel to bring up the AWG userspace tunnel.
-                    // The TUN fd is owned by CoreVpnService.mInterface; we only read the int fd.
-                    // Logs tagged "LimmAWGTunnel" so the applog deep logcat pass captures them
-                    // (AppConfig.TAG is high-volume and gets pushed out → AWG failures were invisible).
-                    LogUtil.i("LimmAWGTunnel", "switch-handler: Switching to AmneziaWG tunnel")
-                    val tunFd = serviceControl.getTunFd()
-                    if (tunFd < 0) {
-                        LogUtil.e("LimmAWGTunnel", "switch-handler: No TUN fd available — AWG switch aborted (not in VPN mode?)")
-                        return
-                    }
-                    // Stop xray but do NOT call stopService() / stopSelf() — that would close mInterface.
-                    // stopCoreLoop() shuts down only the xray loop and unregisters the receiver; the
-                    // VpnService itself (and mInterface) stays alive.
-                    stopCoreLoop()
-                    Thread.sleep(200L)
-                    val started = LimmAWGTunnel.startTunnel(serviceControl.getService().applicationContext, tunFd)
-                    if (started) {
-                        LogUtil.i("LimmAWGTunnel", "switch-handler: AWG tunnel UP on fd=$tunFd")
-                        NotificationManager.showNotification(null)
-                    } else {
-                        LogUtil.e("LimmAWGTunnel", "switch-handler: AWG tunnel failed to start — falling back via MSG_STATE_RESTART")
-                        // Re-register receiver (stopCoreLoop unregistered it) and restart xray
-                        startVService(serviceControl.getService())
-                    }
+                    // Legacy broadcast path (kept for failover); the reliable path is now
+                    // startService(ACTION_SWITCH_AWG) → CoreVpnService.onStartCommand → switchToAwgNow().
+                    switchToAwgNow()
                 }
 
                 AppConfig.MSG_MEASURE_DELAY -> {

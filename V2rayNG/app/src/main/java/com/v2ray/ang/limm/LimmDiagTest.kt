@@ -1,6 +1,7 @@
 package com.v2ray.ang.limm
 
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
@@ -10,7 +11,7 @@ import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.enums.EConfigType
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SettingsManager
-import com.v2ray.ang.util.MessageUtil
+import com.v2ray.ang.service.CoreVpnService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -161,7 +162,6 @@ object LimmDiagTest {
         }
 
         // 1. Establish TUN via xray (select profile + start service). SOCKS coming up == TUN ready.
-        LimmAWGTunnel.pendingConfig = LimmAWGTunnel.AwgConfig("$host:$port", priv, peer)
         withContext(Dispatchers.Main) {
             if (!isActive) return@withContext
             MmkvManager.setSelectServer(guid)
@@ -178,8 +178,19 @@ object LimmDiagTest {
             return ProfileResult(name, false, null)
         }
 
-        // 2. Switch tunnel mode to AmneziaWG on the same fd (handled in :RunSoLibV2RayDaemon).
-        MessageUtil.sendMsg2Service(ctx, AppConfig.MSG_STATE_SWITCH_AWG, "")
+        // 2. Switch to AWG via startService(Intent) → CoreVpnService.onStartCommand in the daemon
+        //    process (reliable cross-process; the broadcast never arrived — E-090). Per-node config
+        //    travels in extras because pendingConfig set here (UI process) is invisible to the daemon.
+        withContext(Dispatchers.Main) {
+            if (!isActive) return@withContext
+            val sw = Intent(ctx, CoreVpnService::class.java).apply {
+                action = AppConfig.ACTION_SWITCH_AWG
+                putExtra("awg_endpoint", "$host:$port")
+                putExtra("awg_priv", priv)
+                putExtra("awg_peer", peer)
+            }
+            ctx.startService(sw)
+        }
 
         // 3. Probe egress DIRECTLY (no SOCKS — AWG is full-TUN). We do NOT gate on
         //    LimmAWGTunnel.isActive: it's a per-process singleton and the tunnel comes up in the
