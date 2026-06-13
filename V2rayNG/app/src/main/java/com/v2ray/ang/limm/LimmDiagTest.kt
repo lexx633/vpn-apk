@@ -42,10 +42,11 @@ import java.util.concurrent.TimeUnit
 object LimmDiagTest {
 
     private const val TAG = "LimmDiag"
-    private const val SOCKS_WAIT_MAX_MS = 10_000L
+    private const val SOCKS_WAIT_MAX_MS = 6_000L   // 10s → 6s: большинство профилей поднимаются за 2-3s
     private const val SOCKS_POLL_MS = 150L
-    private const val EGRESS_TIMEOUT_SEC = 15L
-    private const val EGRESS_RETRY_MAX = 3
+    private const val SOCKS_CLOSE_MAX_MS = 3_000L  // 6s → 3s: ждём гибели старого xray
+    private const val EGRESS_TIMEOUT_SEC = 8L       // 15s → 8s: нерабочий профиль не должен висеть
+    private const val EGRESS_RETRY_MAX = 2           // 3 → 2: экономим ~8s на провальных профилях
     private const val EGRESS_RETRY_DELAY_MS = 500L
 
     private fun vpnTransportUp(ctx: Context): Boolean = try {
@@ -69,9 +70,9 @@ object LimmDiagTest {
         return false
     }
 
-    /** Wait until the SOCKS port stops accepting — old Xray is fully dead. Max 6s. */
+    /** Wait until the SOCKS port stops accepting — old Xray is fully dead. */
     private suspend fun waitForSocksClosed(port: Int) {
-        val deadline = System.currentTimeMillis() + 6_000L
+        val deadline = System.currentTimeMillis() + SOCKS_CLOSE_MAX_MS
         while (System.currentTimeMillis() < deadline) {
             if (!socksAccepting(port)) return
             delay(250)
@@ -215,6 +216,15 @@ object LimmDiagTest {
             // Without this, old Xray's SOCKS inbound may still serve the next profile's
             // egress check → reports ok=1 through the previous (working) tunnel.
             withContext(Dispatchers.IO) { waitForSocksClosed(socksPort) }
+        }
+
+        // Cache results for LimmLogReporter — included in applog (auto + manual "Send log" button)
+        LimmLogReporter.cachedDiagResults = JSONArray().also { arr ->
+            for (p in profileResults) arr.put(JSONObject().apply {
+                put("name", p.name)
+                put("ok", if (p.ok) 1 else 0)
+                p.latencyMs?.let { put("latency_ms", it) }
+            })
         }
 
         // Upload profile test results to /api/fulltest

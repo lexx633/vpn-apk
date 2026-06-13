@@ -27,6 +27,13 @@ import java.util.concurrent.TimeUnit
  */
 object LimmLogReporter {
 
+    /**
+     * Last full-test results set by LimmDiagTest after each run.
+     * Automatically included in the next applog — both from the post-test auto-upload
+     * and from any manual "Send to server" press within the same app session.
+     */
+    var cachedDiagResults: JSONArray? = null
+
     /** Runs blocking network/logcat work — call from a background dispatcher. */
     fun send(context: Context): Pair<Boolean, String> {
         if (!LimmConfig.isConfigured() || LimmConfig.token.isEmpty()) {
@@ -84,6 +91,7 @@ object LimmLogReporter {
             put("probe", probe())
             put("browser_trace", browserTrace())
             put("logcat", JSONArray(readLogcat()))
+            cachedDiagResults?.let { put("diag_results", it) }
         }
     }
 
