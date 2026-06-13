@@ -60,9 +60,10 @@ object LimmDiagTest {
     private const val EGRESS_TIMEOUT_SEC = 5L        // не-xhttp: 5s × 2 = ~10s
     private const val EGRESS_RETRY_MAX = 2
     private const val EGRESS_RETRY_DELAY_MS = 400L
-    // XHTTP (mode=auto, h2/h3 поверх REALITY) чуть медленнее на первый байт, но потолок держим ~12s.
-    private const val XHTTP_EGRESS_TIMEOUT_SEC = 6L  // xhttp: 6s × 2 = ~12s
-    private const val XHTTP_EGRESS_RETRY_MAX = 2
+    // XHTTP (mode=auto, h2/h3 поверх REALITY) реально отдаёт первый байт ~15s на флапающей сети
+    // (FR1-xhttp видели 15.5s). Одна попытка у потолка 15s — ловим рабочий xhttp, но не «борщим».
+    private const val XHTTP_EGRESS_TIMEOUT_SEC = 14L // xhttp: одна попытка ~14s
+    private const val XHTTP_EGRESS_RETRY_MAX = 1
     private const val AWG_WAIT_MAX_MS = 8_000L       // ожидание подъёма AmneziaWG userspace-туннеля
     private const val AWG_POLL_MS = 200L
 
