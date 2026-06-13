@@ -29,7 +29,6 @@ import com.v2ray.ang.service.DialerNativeService
 import com.v2ray.ang.service.DialerWebviewService
 import com.v2ray.ang.service.IDialerService
 import com.v2ray.ang.limm.LimmAWGTunnel
-import com.v2ray.ang.limm.LimmDiagTest
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.MessageUtil
 import com.v2ray.ang.util.Utils
@@ -47,9 +46,6 @@ object CoreServiceManager {
     private val coreController: CoreController = CoreNativeManager.newCoreController(CoreCallback())
     private val mMsgReceive = ReceiveMessageHandler()
     private var currentConfig: ProfileItem? = null
-    // allowInsecure deprecation notice: show at most once per app session (never during Full Test).
-    @Volatile
-    private var insecureWarned = false
     private var processFinder: XrayProcessFinder? = null
     private var browserDialer: IDialerService? = null
 
@@ -166,12 +162,9 @@ object CoreServiceManager {
 //        val result = V2rayConfigUtil.getV2rayConfig(context, guid)
 //        if (!result.status) error(result.errorMessage.ifBlank { "Failed to get V2Ray config" })
 
-        // allowInsecure deprecation notice — once per session, and NEVER during the Full Test
-        // (it starts 9 profiles back-to-back → red-toast spam over the diagnostic, see screenshots).
-        if (config.insecure == true && !insecureWarned && !LimmDiagTest.isRunning) {
-            insecureWarned = true
-            context.toastError(R.string.toast_allow_insecure_deprecated)
-        }
+        // allowInsecure deprecation notice intentionally NOT shown: our profiles use insecure=true
+        // by design (own certs / pinned). The red toast was pure noise (esp. during the Full Test),
+        // so it's removed entirely per product decision.
 
         if (MmkvManager.decodeSettingsBool(AppConfig.PREF_PROXY_SHARING)) {
             context.toast(R.string.toast_warning_pref_proxysharing_short)
