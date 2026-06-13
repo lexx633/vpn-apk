@@ -215,7 +215,7 @@ object LimmLogReporter {
     private fun readLogcat(limit: Int = 2000): List<String> = try {
         val cmd = arrayOf(
             "logcat", "-d", "-v", "time", "-t", limit.toString(),
-            "-s", "GoLog,LimmDiag,$ANG_PACKAGE,AndroidRuntime,System.err,tun2socks"
+            "-s", "GoLog,LimmDiag,LimmAWGTunnel,$ANG_PACKAGE,AndroidRuntime,System.err,tun2socks"
         )
         val proc = Runtime.getRuntime().exec(cmd)
         try {
