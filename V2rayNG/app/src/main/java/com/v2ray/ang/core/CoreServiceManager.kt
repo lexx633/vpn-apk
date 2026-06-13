@@ -515,7 +515,7 @@ object CoreServiceManager {
                     LogUtil.i(AppConfig.TAG, "StartCore-Manager: Restart service")
                     // If AWG was active, stop it cleanly before resuming xray.
                     if (LimmAWGTunnel.isActive) {
-                        LogUtil.i(AppConfig.TAG, "StartCore-Manager: Stopping AWG tunnel before xray restart")
+                        LogUtil.i("LimmAWGTunnel", "restart-handler: Stopping AWG tunnel before xray restart")
                         LimmAWGTunnel.stopTunnel()
                     }
                     serviceControl.stopService()
@@ -527,10 +527,12 @@ object CoreServiceManager {
                     // FR1-awg failover path: stop xray-core while keeping the TUN fd alive,
                     // then hand the fd to LimmAWGTunnel to bring up the AWG userspace tunnel.
                     // The TUN fd is owned by CoreVpnService.mInterface; we only read the int fd.
-                    LogUtil.i(AppConfig.TAG, "StartCore-Manager: Switching to AmneziaWG tunnel")
+                    // Logs tagged "LimmAWGTunnel" so the applog deep logcat pass captures them
+                    // (AppConfig.TAG is high-volume and gets pushed out → AWG failures were invisible).
+                    LogUtil.i("LimmAWGTunnel", "switch-handler: Switching to AmneziaWG tunnel")
                     val tunFd = serviceControl.getTunFd()
                     if (tunFd < 0) {
-                        LogUtil.e(AppConfig.TAG, "StartCore-Manager: No TUN fd available — AWG switch aborted (not in VPN mode?)")
+                        LogUtil.e("LimmAWGTunnel", "switch-handler: No TUN fd available — AWG switch aborted (not in VPN mode?)")
                         return
                     }
                     // Stop xray but do NOT call stopService() / stopSelf() — that would close mInterface.
@@ -540,10 +542,10 @@ object CoreServiceManager {
                     Thread.sleep(200L)
                     val started = LimmAWGTunnel.startTunnel(serviceControl.getService().applicationContext, tunFd)
                     if (started) {
-                        LogUtil.i(AppConfig.TAG, "StartCore-Manager: AWG tunnel UP on fd=$tunFd")
+                        LogUtil.i("LimmAWGTunnel", "switch-handler: AWG tunnel UP on fd=$tunFd")
                         NotificationManager.showNotification(null)
                     } else {
-                        LogUtil.e(AppConfig.TAG, "StartCore-Manager: AWG tunnel failed to start — falling back via MSG_STATE_RESTART")
+                        LogUtil.e("LimmAWGTunnel", "switch-handler: AWG tunnel failed to start — falling back via MSG_STATE_RESTART")
                         // Re-register receiver (stopCoreLoop unregistered it) and restart xray
                         startVService(serviceControl.getService())
                     }
