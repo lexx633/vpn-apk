@@ -52,7 +52,7 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 val payload = runLadder(applicationContext)
                 post(payload)
                 // Автоматическое переключение транспорта при деградации туннеля.
-                // l3_tunnel == 1 означает, что egress IP совпадает с серверным → туннель работает.
+                // l3_tunnel == 1 означает, что туннель несёт трафик (egress получен).
                 val l3ok = payload.optInt("l3_tunnel", -1) == 1
                 val vpnRunning = payload.optInt("vpn_running", 0) == 1
                 LimmFailover.evaluate(applicationContext, l3ok, vpnRunning)
@@ -100,7 +100,7 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 val tun = when {
                     l3 == 1         -> "туннель OK ($egress)"
                     vpnRunning == 0 -> "VPN выключен"
-                    else            -> "туннель НЕ через сервер (${egress ?: "нет ответа"})"
+                    else            -> "туннель не работает (${egress ?: "нет ответа"})"
                 }
                 true to "Чек-ин отправлен: $tun"
             } catch (e: Exception) {
@@ -280,7 +280,7 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 l2 = if (ok) 1 else 0
                 if (ok) {
                     egress = body
-                    l3 = if (egress == srvIp) 1 else 0
+                    l3 = if (egress != null) 1 else 0
                 }
                 // tunnel_ms — 3 HTTP roundtrips through VPN tunnel → average
                 val tmsSamples = mutableListOf<Long>()

@@ -80,16 +80,21 @@ object LimmDiagTest {
         }
     }
 
-    private fun egressViaSocks(socksPort: Int): String? = try {
+    private fun egressViaSocks(socksPort: Int): String? {
         val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
-        OkHttpClient.Builder()
+        val client = OkHttpClient.Builder()
             .proxy(proxy)
             .connectTimeout(EGRESS_TIMEOUT_SEC, TimeUnit.SECONDS)
             .readTimeout(EGRESS_TIMEOUT_SEC, TimeUnit.SECONDS)
             .build()
-            .newCall(Request.Builder().url("https://api.ipify.org").build())
-            .execute().use { r -> if (r.isSuccessful) r.body?.string()?.trim() else null }
-    } catch (e: Exception) { null }
+        for (url in listOf("https://api.ipify.org", "https://checkip.amazonaws.com")) {
+            try {
+                client.newCall(Request.Builder().url(url).build())
+                    .execute().use { r -> if (r.isSuccessful) return r.body?.string()?.trim() }
+            } catch (e: Exception) { /* try next */ }
+        }
+        return null
+    }
 
     private data class ProfileResult(val name: String, val ok: Boolean, val latencyMs: Long?, val egressIp: String? = null)
 
@@ -159,6 +164,7 @@ object LimmDiagTest {
         val profileResults = mutableListOf<ProfileResult>()
 
         for (guid in guids) {
+            if (!isActive) break
             val cfg = MmkvManager.decodeServerConfig(guid)
             val name = cfg?.remarks?.takeIf { it.isNotEmpty() } ?: guid.take(8)
 
@@ -236,7 +242,8 @@ object LimmDiagTest {
 
         // Post-test checkin: switch to best working profile, run full checkin so the
         // dashboard shows correct Статус / Сервисы / Пинг after Full Test.
-        val bestIdx = profileResults.indexOfFirst { it.ok }
+        val bestResult = profileResults.filter { it.ok }.minByOrNull { it.latencyMs ?: Long.MAX_VALUE }
+        val bestIdx = if (bestResult != null) profileResults.indexOf(bestResult) else -1
         var logUploaded = false
         if (bestIdx >= 0) {
             val bestGuid = guids[bestIdx]
