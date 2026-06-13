@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Base64
 import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.util.LogUtil
+import org.amnezia.awg.GoBackend
+import org.amnezia.awg.util.SharedLibraryLoader
 
 /**
  * LimmAWGTunnel — AmneziaWG (FR1-awg) userspace tunnel control for the SINGLE existing VpnService.
@@ -25,12 +27,16 @@ import com.v2ray.ang.util.LogUtil
  * VpnService.Builder().establish(); we instead hand it the fd of CoreVpnService's already-established
  * TUN. So: stop xray-core, then start the AWG userspace tunnel on the SAME tun fd — no 2nd service.
  *
- * ── Wiring status ──────────────────────────────────────────────────────────────────────────────
- * The amneziawg-android `tunnel` library is NOT yet on the classpath (see the TODO block in
- * app/build.gradle.kts for the two wiring options). Until it is, every native call here is made
- * REFLECTIVELY and degrades to a no-op returning false — so the failover ladder safely skips
- * FR1-awg rather than crashing. Once the AAR/JNI is wired, flip [isAvailable] to a real check and
- * the reflective calls resolve to the real `org.amnezia.awg.backend.GoBackend` natives.
+ * ── Wiring status (RESOLVED 2026-06-13) ─────────────────────────────────────────────────────────
+ * amneziawg-tunnel.aar is on the classpath (app/build.gradle.kts: fileTree *.aar + jniLibs "libs").
+ * The fd-based natives live in **`org.amnezia.awg.GoBackend`** (NOT `…awg.backend.GoBackend`, which
+ * is the high-level wrapper that creates its own VpnService). They are `public static`:
+ *     public static native int  awgTurnOn(String ifName, int tunFd, String settings);
+ *     public static native void awgTurnOff(int handle);
+ * That class does NOT load the native lib itself, so we must call
+ * SharedLibraryLoader.loadSharedLibrary(ctx, "wg-go") before the first native call.
+ * (Earlier this code reflected `…awg.backend.GoBackend.awgTurnOn` → NoSuchMethodException → AWG
+ * never came up; see ERRORS E-090.)
  *
  * ── Key handling ───────────────────────────────────────────────────────────────────────────────
  * The client private key is NEVER in git. It is baked at build time from the AWG_CLIENT_PRIVKEY
@@ -45,8 +51,11 @@ object LimmAWGTunnel {
     /** Logical interface name passed to awgTurnOn (cosmetic, shows up in wg-go logs). */
     private const val IF_NAME = "awg-fr1"
 
-    /** Native backend class from amneziawg-android once it is on the classpath. */
-    private const val BACKEND_CLASS = "org.amnezia.awg.backend.GoBackend"
+    /** Native shared lib bundled in amneziawg-tunnel.aar (jni/<abi>/libwg-go.so). */
+    private const val WG_LIB = "wg-go"
+
+    @Volatile
+    private var libLoaded = false
 
     /** Handle returned by awgTurnOn (>=0 when up). -1 = down. Guarded by [lock]. */
     @Volatile
@@ -79,11 +88,23 @@ object LimmAWGTunnel {
      */
     val isAvailable: Boolean by lazy {
         try {
-            Class.forName(BACKEND_CLASS)
-            // Loading the shared lib is the backend's responsibility (SharedLibraryLoader "wg-go").
-            // Presence of the class is our cheap gate; real availability is confirmed on first start.
+            // The fd-based native bridge — presence of THIS class is the real gate.
+            Class.forName("org.amnezia.awg.GoBackend")
             true
         } catch (_: Throwable) {
+            false
+        }
+    }
+
+    /** Load libwg-go.so once (the native GoBackend class does not load it itself). */
+    private fun ensureLib(ctx: Context): Boolean {
+        if (libLoaded) return true
+        return try {
+            SharedLibraryLoader.loadSharedLibrary(ctx.applicationContext, WG_LIB)
+            libLoaded = true
+            true
+        } catch (e: Throwable) {
+            LogUtil.e(TAG, "Failed to load $WG_LIB native lib: ${e.message}", e)
             false
         }
     }
@@ -142,10 +163,12 @@ object LimmAWGTunnel {
             LogUtil.w(TAG, "AWG backend not on classpath — FR1-awg unavailable, skipping")
             return false
         }
-        if (BuildConfig.LIMM_AWG_PRIVKEY.isEmpty()) {
-            LogUtil.w(TAG, "AWG private key not baked (AWG_CLIENT_PRIVKEY missing) — cannot start")
+        val effectivePriv = pendingConfig?.privKeyB64 ?: BuildConfig.LIMM_AWG_PRIVKEY
+        if (effectivePriv.isEmpty()) {
+            LogUtil.w(TAG, "AWG private key missing (no pendingConfig, AWG_CLIENT_PRIVKEY not baked) — cannot start")
             return false
         }
+        if (!ensureLib(ctx)) return false
         synchronized(lock) {
             if (tunnelHandle >= 0) {
                 LogUtil.i(TAG, "AWG tunnel already up (handle=$tunnelHandle)")
@@ -153,15 +176,8 @@ object LimmAWGTunnel {
             }
             return try {
                 val cfg = buildUapiConfig()
-                // Reflective call to the native bridge until the AAR is compile-time wired.
-                // Real signature: int awgTurnOn(String ifName, int tunFd, String settings)
-                val backendCls = Class.forName(BACKEND_CLASS)
-                val m = backendCls.getDeclaredMethod(
-                    "awgTurnOn",
-                    String::class.java, Int::class.javaPrimitiveType, String::class.java
-                )
-                m.isAccessible = true
-                val handle = m.invoke(null, IF_NAME, tunFd, cfg) as Int
+                // Direct call to the fd-based native bridge (org.amnezia.awg.GoBackend).
+                val handle = GoBackend.awgTurnOn(IF_NAME, tunFd, cfg)
                 if (handle < 0) {
                     LogUtil.e(TAG, "awgTurnOn returned $handle — tunnel did not come up")
                     return false
@@ -186,10 +202,7 @@ object LimmAWGTunnel {
             val h = tunnelHandle
             if (h < 0) return
             try {
-                val backendCls = Class.forName(BACKEND_CLASS)
-                val m = backendCls.getDeclaredMethod("awgTurnOff", Int::class.javaPrimitiveType)
-                m.isAccessible = true
-                m.invoke(null, h)
+                GoBackend.awgTurnOff(h)
                 LogUtil.i(TAG, "AWG userspace tunnel DOWN (handle=$h)")
             } catch (e: Throwable) {
                 LogUtil.e(TAG, "Failed to stop AWG tunnel: ${e.message}", e)
