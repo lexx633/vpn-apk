@@ -53,6 +53,9 @@ object LimmDiagTest {
     private const val EGRESS_TIMEOUT_SEC = 8L       // 15s → 8s: нерабочий профиль не должен висеть
     private const val EGRESS_RETRY_MAX = 2           // 3 → 2: экономим ~8s на провальных профилях
     private const val EGRESS_RETRY_DELAY_MS = 500L
+    // XHTTP (mode=auto, h2/h3 поверх REALITY) медленный на первый байт — даём больше времени и попыток.
+    private const val XHTTP_EGRESS_TIMEOUT_SEC = 15L
+    private const val XHTTP_EGRESS_RETRY_MAX = 3
     private const val AWG_WAIT_MAX_MS = 8_000L       // ожидание подъёма AmneziaWG userspace-туннеля
     private const val AWG_POLL_MS = 200L
 
@@ -86,12 +89,12 @@ object LimmDiagTest {
         }
     }
 
-    private fun egressViaSocks(socksPort: Int): String? {
+    private fun egressViaSocks(socksPort: Int, timeoutSec: Long = EGRESS_TIMEOUT_SEC): String? {
         val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
         val client = OkHttpClient.Builder()
             .proxy(proxy)
-            .connectTimeout(EGRESS_TIMEOUT_SEC, TimeUnit.SECONDS)
-            .readTimeout(EGRESS_TIMEOUT_SEC, TimeUnit.SECONDS)
+            .connectTimeout(timeoutSec, TimeUnit.SECONDS)
+            .readTimeout(timeoutSec, TimeUnit.SECONDS)
             .build()
         for (url in listOf("https://api.ipify.org", "https://checkip.amazonaws.com")) {
             try {
@@ -318,14 +321,17 @@ object LimmDiagTest {
             }
 
             val t0 = System.currentTimeMillis()
-            // XHTTP может отдать пустой ответ на первый запрос (~15s timeout) — делаем до
-            // EGRESS_RETRY_MAX попыток с паузой между ними.
+            // XHTTP (mode=auto, h2/h3 поверх REALITY) медленный на первый байт → больше времени и
+            // попыток, иначе ложный fail. Остальным транспортам хватает базовых значений.
+            val isXhttp = name.endsWith("-xhttp", ignoreCase = true)
+            val egTimeout = if (isXhttp) XHTTP_EGRESS_TIMEOUT_SEC else EGRESS_TIMEOUT_SEC
+            val egRetries = if (isXhttp) XHTTP_EGRESS_RETRY_MAX else EGRESS_RETRY_MAX
             var egress: String? = null
-            for (attempt in 1..EGRESS_RETRY_MAX) {
-                egress = withContext(Dispatchers.IO) { egressViaSocks(socksPort) }
+            for (attempt in 1..egRetries) {
+                egress = withContext(Dispatchers.IO) { egressViaSocks(socksPort, egTimeout) }
                 if (egress != null) break
-                if (attempt < EGRESS_RETRY_MAX) {
-                    onProgress("    ↻  попытка ${attempt + 1}/$EGRESS_RETRY_MAX…")
+                if (attempt < egRetries) {
+                    onProgress("    ↻  попытка ${attempt + 1}/$egRetries…")
                     Log.d(TAG, "profile $name: egress attempt $attempt failed, retrying")
                     delay(EGRESS_RETRY_DELAY_MS)
                 }
@@ -336,7 +342,7 @@ object LimmDiagTest {
             val vpnOk = egress != null
             val note = when {
                 egress != null -> "$egress  [${ms}ms]${if (egress == serverIp) "  = DE1 ✓" else ""}"
-                else           -> "нет ответа  [${ms}ms, $EGRESS_RETRY_MAX попытки]"
+                else           -> "нет ответа  [${ms}ms, $egRetries попытки]"
             }
             onProgress("    ${if (vpnOk) "✓" else "✗"}  ▸ $name  ($note)")
             Log.i(TAG, "profile $name: egress=$egress serverIp=$serverIp ok=$vpnOk ms=$ms")
