@@ -36,8 +36,9 @@ import java.util.concurrent.TimeUnit
  *  4. Restore original profile
  *  5. Upload applog
  *
- * Max time per profile: ~60s (10s SOCKS wait + 3×15s egress retries + overhead).
+ * Max time per profile: ~25s (6s SOCKS wait + 2×8s egress retries + overhead).
  * XHTTP may return no data on the first request — up to EGRESS_RETRY_MAX attempts are made.
+ * ok=true if any egress IP is returned (tunnel up); egress_ip recorded for multi-server analysis.
  */
 object LimmDiagTest {
 
@@ -90,7 +91,7 @@ object LimmDiagTest {
             .execute().use { r -> if (r.isSuccessful) r.body?.string()?.trim() else null }
     } catch (e: Exception) { null }
 
-    private data class ProfileResult(val name: String, val ok: Boolean, val latencyMs: Long?)
+    private data class ProfileResult(val name: String, val ok: Boolean, val latencyMs: Long?, val egressIp: String? = null)
 
     private fun postFullTest(ctx: Context, profiles: List<ProfileResult>) {
         if (profiles.isEmpty()) return
@@ -101,6 +102,7 @@ object LimmDiagTest {
                     put("name", p.name)
                     put("ok", if (p.ok) 1 else 0)
                     if (p.latencyMs != null) put("latency_ms", p.latencyMs)
+                    if (p.egressIp != null) put("egress_ip", p.egressIp)
                 }
                 arr.put(obj)
             }
@@ -172,7 +174,7 @@ object LimmDiagTest {
 
             val socksReady = waitForSocks(socksPort)
             if (!socksReady) {
-                onProgress("    ✗  ▸ $name  (SOCKS :$socksPort не поднялся за 10s)")
+                onProgress("    ✗  ▸ $name  (SOCKS :$socksPort не поднялся за ${SOCKS_WAIT_MAX_MS / 1000}s)")
                 Log.w(TAG, "profile $name: SOCKS timeout")
                 profileResults.add(ProfileResult(name, false, null))
                 withContext(Dispatchers.Main) {
@@ -197,15 +199,16 @@ object LimmDiagTest {
                 }
             }
             val ms = System.currentTimeMillis() - t0
-            val vpnOk = egress == serverIp
+            // ok = tunnel carried traffic (any egress returned). We don't compare to serverIp
+            // because profiles may exit through different servers (FR / DE1 / etc.).
+            val vpnOk = egress != null
             val note = when {
-                egress == serverIp -> "$egress  = VPN ✓  [${ms}ms]"
-                egress != null     -> "$egress  ≠ $serverIp  [${ms}ms]"
-                else               -> "нет ответа от api.ipify.org  [${ms}ms, $EGRESS_RETRY_MAX попытки]"
+                egress != null -> "$egress  [${ms}ms]${if (egress == serverIp) "  = DE1 ✓" else ""}"
+                else           -> "нет ответа от api.ipify.org  [${ms}ms, $EGRESS_RETRY_MAX попытки]"
             }
             onProgress("    ${if (vpnOk) "✓" else "✗"}  ▸ $name  ($note)")
-            Log.i(TAG, "profile $name: egress=$egress expected=$serverIp ok=$vpnOk ms=$ms")
-            profileResults.add(ProfileResult(name, vpnOk, if (vpnOk) ms else null))
+            Log.i(TAG, "profile $name: egress=$egress serverIp=$serverIp ok=$vpnOk ms=$ms")
+            profileResults.add(ProfileResult(name, vpnOk, if (vpnOk) ms else null, egress))
 
             withContext(Dispatchers.Main) {
                 if (!isActive) return@withContext
@@ -224,6 +227,7 @@ object LimmDiagTest {
                 put("name", p.name)
                 put("ok", if (p.ok) 1 else 0)
                 p.latencyMs?.let { put("latency_ms", it) }
+                p.egressIp?.let { put("egress_ip", it) }
             })
         }
 
