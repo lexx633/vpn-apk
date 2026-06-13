@@ -41,6 +41,11 @@ object LimmSelfUpdater {
      * Calls [onProgress] with 0-100 as data arrives; 100 = done.
      * Returns the File on success, null on any error.
      */
+    /** True if a local SOCKS inbound is listening (VPN up) — process-independent, unlike isRunning(). */
+    private fun isSocksOpen(port: Int): Boolean = try {
+        java.net.Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 400); true }
+    } catch (e: Exception) { false }
+
     suspend fun downloadApk(
         ctx: Context,
         apkUrl: String,
@@ -54,12 +59,15 @@ object LimmSelfUpdater {
         val builder = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
-        if (CoreServiceManager.isRunning()) {
-            val socksPort = try { SettingsManager.getSocksPort() } catch (e: Exception) { 0 }
-            if (socksPort > 0) {
-                builder.proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort)))
-                Log.i(TAG, "Download via tunnel SOCKS 127.0.0.1:$socksPort")
-            }
+        // Route via the local SOCKS inbound when it's actually LISTENING. NB: probe the PORT, не
+        // CoreServiceManager.isRunning() — ядро живёт в процессе сервиса, а этот код в UI-процессе,
+        // там isRunning()=false → загрузка падала на прямой (заблокированный) путь → висла на 0%.
+        val socksPort = try { SettingsManager.getSocksPort() } catch (e: Exception) { 0 }
+        if (socksPort > 0 && isSocksOpen(socksPort)) {
+            builder.proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort)))
+            Log.i(TAG, "Download via tunnel SOCKS 127.0.0.1:$socksPort")
+        } else {
+            Log.i(TAG, "Download direct (SOCKS :$socksPort not listening)")
         }
         val client = builder.build()
 

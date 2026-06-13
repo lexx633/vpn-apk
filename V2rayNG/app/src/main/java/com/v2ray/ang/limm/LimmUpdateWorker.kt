@@ -15,7 +15,6 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.R
-import com.v2ray.ang.core.CoreServiceManager
 import com.v2ray.ang.handler.SettingsManager
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -56,17 +55,21 @@ class LimmUpdateWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
                 .enqueueUniquePeriodicWork(UNIQUE, ExistingPeriodicWorkPolicy.KEEP, req)
         }
 
+        private fun isSocksOpen(port: Int): Boolean = try {
+            java.net.Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 400); true }
+        } catch (e: Exception) { false }
+
         private fun checkAndUpdate(ctx: Context) {
             // Route via the tunnel's SOCKS when the core is up — the app is excluded from its own
             // VPN, so direct HTTP to limm.space (CF) is blocked on censored ISPs (hang at 0%).
             val builder = OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(30, TimeUnit.SECONDS)
-            if (CoreServiceManager.isRunning()) {
-                val socksPort = try { SettingsManager.getSocksPort() } catch (e: Exception) { 0 }
-                if (socksPort > 0) {
-                    builder.proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort)))
-                }
+            // Probe the SOCKS PORT (process-independent) — CoreServiceManager.isRunning() is false
+            // outside the core's process, so it can't gate this reliably.
+            val socksPort = try { SettingsManager.getSocksPort() } catch (e: Exception) { 0 }
+            if (socksPort > 0 && isSocksOpen(socksPort)) {
+                builder.proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort)))
             }
             val client = builder.build()
 
