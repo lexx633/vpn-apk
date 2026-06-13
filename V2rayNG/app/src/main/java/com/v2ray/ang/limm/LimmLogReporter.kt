@@ -212,16 +212,30 @@ object LimmLogReporter {
         }
     }
 
+    private fun execLogcat(args: Array<String>): List<String> {
+        val proc = Runtime.getRuntime().exec(args)
+        return try { proc.inputStream.bufferedReader().use { it.readLines() } }
+        finally { proc.destroyForcibly() }
+    }
+
     private fun readLogcat(limit: Int = 2000): List<String> = try {
-        val cmd = arrayOf(
+        // Pass 1: sparse Limm diagnostics only (esp. LimmAWGTunnel awgTurnOn failures). These tags
+        // emit few lines, so a deep -t reaches back through the WHOLE test even when GoLog floods
+        // the buffer — the bounded full pass below pushes them out of its window (that's why AWG
+        // errors were never captured before).
+        val diag = execLogcat(arrayOf(
+            "logcat", "-d", "-v", "time", "-t", "20000", "-s", "LimmDiag,LimmAWGTunnel"
+        ))
+        // Pass 2: full context (xray GoLog + app), bounded.
+        val full = execLogcat(arrayOf(
             "logcat", "-d", "-v", "time", "-t", limit.toString(),
             "-s", "GoLog,LimmDiag,LimmAWGTunnel,$ANG_PACKAGE,AndroidRuntime,System.err,tun2socks"
-        )
-        val proc = Runtime.getRuntime().exec(cmd)
-        try {
-            proc.inputStream.bufferedReader().use { it.readLines() }
-        } finally {
-            proc.destroyForcibly()
+        ))
+        buildList {
+            add("=== LimmDiag/AWG (deep) ===")
+            addAll(diag)
+            add("=== full tail ===")
+            addAll(full)
         }
     } catch (e: Exception) {
         listOf("logcat read failed: ${e.message}")

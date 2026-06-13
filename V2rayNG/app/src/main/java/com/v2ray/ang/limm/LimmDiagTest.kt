@@ -64,6 +64,9 @@ object LimmDiagTest {
     // (FR1-xhttp видели 15.5s). Одна попытка у потолка 15s — ловим рабочий xhttp, но не «борщим».
     private const val XHTTP_EGRESS_TIMEOUT_SEC = 14L // xhttp: одна попытка ~14s
     private const val XHTTP_EGRESS_RETRY_MAX = 1
+    // hy2 (UDP-handshake) иногда чуть дольше базовых 10s — даём 12s, чтобы не флапал в fail.
+    private const val HY2_EGRESS_TIMEOUT_SEC = 6L    // hy2: 6s × 2 = ~12s
+    private const val HY2_EGRESS_RETRY_MAX = 2
     private const val AWG_WAIT_MAX_MS = 8_000L       // ожидание подъёма AmneziaWG userspace-туннеля
     private const val AWG_POLL_MS = 200L
 
@@ -333,8 +336,9 @@ object LimmDiagTest {
             // XHTTP (mode=auto, h2/h3 поверх REALITY) медленный на первый байт → больше времени и
             // попыток, иначе ложный fail. Остальным транспортам хватает базовых значений.
             val isXhttp = name.endsWith("-xhttp", ignoreCase = true)
-            val egTimeout = if (isXhttp) XHTTP_EGRESS_TIMEOUT_SEC else EGRESS_TIMEOUT_SEC
-            val egRetries = if (isXhttp) XHTTP_EGRESS_RETRY_MAX else EGRESS_RETRY_MAX
+            val isHy2 = name.endsWith("-hy2", ignoreCase = true)
+            val egTimeout = when { isXhttp -> XHTTP_EGRESS_TIMEOUT_SEC; isHy2 -> HY2_EGRESS_TIMEOUT_SEC; else -> EGRESS_TIMEOUT_SEC }
+            val egRetries = when { isXhttp -> XHTTP_EGRESS_RETRY_MAX; isHy2 -> HY2_EGRESS_RETRY_MAX; else -> EGRESS_RETRY_MAX }
             var egress: String? = null
             for (attempt in 1..egRetries) {
                 egress = withContext(Dispatchers.IO) { egressViaSocks(socksPort, egTimeout) }
