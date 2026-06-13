@@ -164,7 +164,6 @@ object LimmDiagTest {
         val profileResults = mutableListOf<ProfileResult>()
 
         for (guid in guids) {
-            if (!isActive) break
             val cfg = MmkvManager.decodeServerConfig(guid)
             val name = cfg?.remarks?.takeIf { it.isNotEmpty() } ?: guid.take(8)
 
@@ -210,7 +209,7 @@ object LimmDiagTest {
             val vpnOk = egress != null
             val note = when {
                 egress != null -> "$egress  [${ms}ms]${if (egress == serverIp) "  = DE1 ✓" else ""}"
-                else           -> "нет ответа от api.ipify.org  [${ms}ms, $EGRESS_RETRY_MAX попытки]"
+                else           -> "нет ответа  [${ms}ms, $EGRESS_RETRY_MAX попытки]"
             }
             onProgress("    ${if (vpnOk) "✓" else "✗"}  ▸ $name  ($note)")
             Log.i(TAG, "profile $name: egress=$egress serverIp=$serverIp ok=$vpnOk ms=$ms")
