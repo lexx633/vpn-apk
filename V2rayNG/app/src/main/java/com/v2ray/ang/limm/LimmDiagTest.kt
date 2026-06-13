@@ -46,16 +46,23 @@ import java.util.concurrent.TimeUnit
  */
 object LimmDiagTest {
 
+    /** True while a Full Test is running — CoreServiceManager checks this to suppress the
+     *  allowInsecure deprecation red-toast (profiles start back-to-back during the test). */
+    @Volatile
+    var isRunning = false
+
     private const val TAG = "LimmDiag"
     private const val SOCKS_WAIT_MAX_MS = 6_000L   // 10s → 6s: большинство профилей поднимаются за 2-3s
     private const val SOCKS_POLL_MS = 150L
     private const val SOCKS_CLOSE_MAX_MS = 3_000L  // 6s → 3s: ждём гибели старого xray
-    private const val EGRESS_TIMEOUT_SEC = 8L       // 15s → 8s: нерабочий профиль не должен висеть
-    private const val EGRESS_RETRY_MAX = 2           // 3 → 2: экономим ~8s на провальных профилях
-    private const val EGRESS_RETRY_DELAY_MS = 500L
-    // XHTTP (mode=auto, h2/h3 поверх REALITY) медленный на первый байт — даём больше времени и попыток.
-    private const val XHTTP_EGRESS_TIMEOUT_SEC = 15L
-    private const val XHTTP_EGRESS_RETRY_MAX = 3
+    // Бюджет на профиль ограничен (~12s макс): egressViaSocks пробует ОДИН url (ipify), без
+    // второго фолбэка — раньше 2 url × таймаут × ретраи давали до 90s на одном профиле («борщ»).
+    private const val EGRESS_TIMEOUT_SEC = 5L        // не-xhttp: 5s × 2 = ~10s
+    private const val EGRESS_RETRY_MAX = 2
+    private const val EGRESS_RETRY_DELAY_MS = 400L
+    // XHTTP (mode=auto, h2/h3 поверх REALITY) чуть медленнее на первый байт, но потолок держим ~12s.
+    private const val XHTTP_EGRESS_TIMEOUT_SEC = 6L  // xhttp: 6s × 2 = ~12s
+    private const val XHTTP_EGRESS_RETRY_MAX = 2
     private const val AWG_WAIT_MAX_MS = 8_000L       // ожидание подъёма AmneziaWG userspace-туннеля
     private const val AWG_POLL_MS = 200L
 
@@ -96,12 +103,12 @@ object LimmDiagTest {
             .connectTimeout(timeoutSec, TimeUnit.SECONDS)
             .readTimeout(timeoutSec, TimeUnit.SECONDS)
             .build()
-        for (url in listOf("https://api.ipify.org", "https://checkip.amazonaws.com")) {
-            try {
-                client.newCall(Request.Builder().url(url).build())
-                    .execute().use { r -> if (r.isSuccessful) return r.body?.string()?.trim() }
-            } catch (e: Exception) { /* try next */ }
-        }
+        // Single endpoint (no amazonaws fallback): 2 urls × timeout × retries ballooned to ~90s
+        // on a dead profile. One url keeps the per-profile budget tight.
+        try {
+            client.newCall(Request.Builder().url("https://api.ipify.org").build())
+                .execute().use { r -> if (r.isSuccessful) return r.body?.string()?.trim() }
+        } catch (e: Exception) { /* timeout/fail → null */ }
         return null
     }
 
@@ -114,12 +121,10 @@ object LimmDiagTest {
             .connectTimeout(EGRESS_TIMEOUT_SEC, TimeUnit.SECONDS)
             .readTimeout(EGRESS_TIMEOUT_SEC, TimeUnit.SECONDS)
             .build()
-        for (url in listOf("https://api.ipify.org", "https://checkip.amazonaws.com")) {
-            try {
-                client.newCall(Request.Builder().url(url).build())
-                    .execute().use { r -> if (r.isSuccessful) return r.body?.string()?.trim() }
-            } catch (e: Exception) { /* try next */ }
-        }
+        try {
+            client.newCall(Request.Builder().url("https://api.ipify.org").build())
+                .execute().use { r -> if (r.isSuccessful) return r.body?.string()?.trim() }
+        } catch (e: Exception) { /* timeout/fail → null */ }
         return null
     }
 
@@ -259,6 +264,9 @@ object LimmDiagTest {
             onProgress("❌  Нет разрешения VPN.\n\nСначала подключитесь вручную, затем запустите тест снова.")
             return
         }
+
+        isRunning = true   // suppress allowInsecure red-toast while the test churns profiles
+        try {
 
         val wasRunning = CoreServiceManager.isRunning() || vpnTransportUp(ctx)
         if (wasRunning) {
@@ -437,6 +445,9 @@ object LimmDiagTest {
             onProgress("\n📤  Отправляю лог на сервер…")
             val (logOk, logMsg) = withContext(Dispatchers.IO) { LimmLogReporter.send(ctx) }
             onProgress(if (logOk) "    ✓ Лог отправлен" else "    ✗ $logMsg")
+        }
+        } finally {
+            isRunning = false
         }
     }
 }
