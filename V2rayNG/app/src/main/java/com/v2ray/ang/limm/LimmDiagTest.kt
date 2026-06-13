@@ -67,8 +67,6 @@ object LimmDiagTest {
     // hy2 (UDP-handshake) иногда чуть дольше базовых 10s — даём 12s, чтобы не флапал в fail.
     private const val HY2_EGRESS_TIMEOUT_SEC = 6L    // hy2: 6s × 2 = ~12s
     private const val HY2_EGRESS_RETRY_MAX = 2
-    private const val AWG_WAIT_MAX_MS = 8_000L       // ожидание подъёма AmneziaWG userspace-туннеля
-    private const val AWG_POLL_MS = 200L
 
     private fun vpnTransportUp(ctx: Context): Boolean = try {
         val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -132,15 +130,6 @@ object LimmDiagTest {
         return null
     }
 
-    /** Poll until the AmneziaWG userspace tunnel reports active, or timeout. */
-    private suspend fun waitAwgActive(): Boolean {
-        val deadline = System.currentTimeMillis() + AWG_WAIT_MAX_MS
-        while (System.currentTimeMillis() < deadline) {
-            if (LimmAWGTunnel.isActive) return true
-            delay(AWG_POLL_MS)
-        }
-        return LimmAWGTunnel.isActive
-    }
 
     private data class ProfileResult(val name: String, val ok: Boolean, val latencyMs: Long?, val egressIp: String? = null)
 
@@ -189,28 +178,27 @@ object LimmDiagTest {
             return ProfileResult(name, false, null)
         }
 
-        // 2. Switch tunnel mode to AmneziaWG on the same fd.
+        // 2. Switch tunnel mode to AmneziaWG on the same fd (handled in :RunSoLibV2RayDaemon).
         MessageUtil.sendMsg2Service(ctx, AppConfig.MSG_STATE_SWITCH_AWG, "")
-        val awgUp = waitAwgActive()
 
-        // 3. Direct egress probe (no SOCKS — AWG is full-TUN).
+        // 3. Probe egress DIRECTLY (no SOCKS — AWG is full-TUN). We do NOT gate on
+        //    LimmAWGTunnel.isActive: it's a per-process singleton and the tunnel comes up in the
+        //    DAEMON process, so isActive is always false here in the UI process (E-090 root cause).
+        //    A direct egress reply is the process-independent truth that the tunnel carries traffic.
+        delay(2500)  // give the daemon time to stop xray and bring AWG up on the fd
         val t0 = System.currentTimeMillis()
         var egress: String? = null
-        if (awgUp) {
-            for (attempt in 1..EGRESS_RETRY_MAX) {
-                egress = withContext(Dispatchers.IO) { egressDirect() }
-                if (egress != null) break
-                if (attempt < EGRESS_RETRY_MAX) {
-                    onProgress("    ↻  попытка ${attempt + 1}/$EGRESS_RETRY_MAX…")
-                    delay(EGRESS_RETRY_DELAY_MS)
-                }
-            }
+        for (attempt in 1..3) {
+            egress = withContext(Dispatchers.IO) { egressDirect() }
+            if (egress != null) break
+            onProgress("    ↻  попытка ${attempt + 1}/3…")
+            delay(EGRESS_RETRY_DELAY_MS)
         }
         val ms = System.currentTimeMillis() - t0
         val ok = egress != null
-        val note = if (ok) "$egress  [${ms}ms]" else if (awgUp) "нет ответа  [${ms}ms]" else "AWG не поднялся"
+        val note = if (ok) "$egress  [${ms}ms]" else "нет ответа  [${ms}ms]"
         onProgress("    ${if (ok) "✓" else "✗"}  ▸ $name  ($note)")
-        Log.i(TAG, "profile $name (awg): up=$awgUp egress=$egress ok=$ok ms=$ms")
+        Log.i(TAG, "profile $name (awg): egress=$egress ok=$ok ms=$ms")
 
         // 4. Teardown: stop AWG, re-register service receiver (startVService restores it — same
         //    recovery the MSG_STATE_SWITCH_AWG failure branch uses), then stop the service.

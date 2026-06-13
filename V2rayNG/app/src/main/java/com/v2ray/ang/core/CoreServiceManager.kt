@@ -488,8 +488,12 @@ object CoreServiceManager {
          * @param intent The intent being received.
          */
         override fun onReceive(ctx: Context?, intent: Intent?) {
+            val msgKey = intent?.getIntExtra("key", 0) ?: 0
+            // Diagnostic: confirm the SWITCH_AWG broadcast actually reaches this (daemon) process.
+            if (msgKey == AppConfig.MSG_STATE_SWITCH_AWG)
+                LogUtil.i("LimmAWGTunnel", "onReceive: MSG_STATE_SWITCH_AWG received (serviceControl=${serviceControl?.get() != null})")
             val serviceControl = serviceControl?.get() ?: return
-            when (intent?.getIntExtra("key", 0)) {
+            when (msgKey) {
                 AppConfig.MSG_REGISTER_CLIENT -> {
                     if (coreController.isRunning) {
                         MessageUtil.sendMsg2UI(serviceControl.getService(), AppConfig.MSG_STATE_RUNNING, "")
