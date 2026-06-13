@@ -195,10 +195,17 @@ object LimmDiagTest {
             delay(EGRESS_RETRY_DELAY_MS)
         }
         val ms = System.currentTimeMillis() - t0
-        val ok = egress != null
-        val note = if (ok) "$egress  [${ms}ms]" else "нет ответа  [${ms}ms]"
+        // AWG is full-TUN: egressDirect goes through the default route. If the tunnel is UP, egress
+        // == the AWG server IP ($host). If the tunnel did NOT come up, the direct probe leaks the
+        // PHONE's own IP and would falsely report ok — so require egress == server IP.
+        val ok = egress != null && egress == host
+        val note = when {
+            ok            -> "$egress  [${ms}ms]"
+            egress != null -> "egress=$egress ≠ $host (туннель не несёт)  [${ms}ms]"
+            else          -> "нет ответа  [${ms}ms]"
+        }
         onProgress("    ${if (ok) "✓" else "✗"}  ▸ $name  ($note)")
-        Log.i(TAG, "profile $name (awg): egress=$egress ok=$ok ms=$ms")
+        Log.i(TAG, "profile $name (awg): egress=$egress host=$host ok=$ok ms=$ms")
 
         // 4. Teardown: stop AWG, re-register service receiver (startVService restores it — same
         //    recovery the MSG_STATE_SWITCH_AWG failure branch uses), then stop the service.
