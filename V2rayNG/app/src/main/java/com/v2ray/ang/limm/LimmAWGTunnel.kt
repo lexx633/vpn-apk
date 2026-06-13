@@ -58,6 +58,21 @@ object LimmAWGTunnel {
     val isActive: Boolean get() = tunnelHandle >= 0
 
     /**
+     * Per-node AWG parameters (endpoint + keys). The obfuscation params (jc/jmin/…) are uniform
+     * across nodes and stay baked in BuildConfig/LimmRemoteConfig, so only these three differ.
+     */
+    data class AwgConfig(val endpoint: String, val privKeyB64: String, val peerPubB64: String)
+
+    /**
+     * Optional per-node config used by the NEXT [startTunnel]. Set this before sending
+     * MSG_STATE_SWITCH_AWG to bring up a specific node (used by LimmDiagTest to test both
+     * DE1-awg and FR1-awg). When null, [buildUapiConfig] falls back to the baked DE1 config —
+     * so the production failover path (which never sets this) is unchanged. Cleared on stop.
+     */
+    @Volatile
+    var pendingConfig: AwgConfig? = null
+
+    /**
      * True if the native amneziawg-android backend is actually present on the classpath.
      * While false, [startTunnel] no-ops and the ladder must NOT route to FR1-awg (LimmFailover
      * filters the ladder by this — see LimmFailover.activeLadder()).
@@ -86,10 +101,12 @@ object LimmAWGTunnel {
         Base64.decode(this, Base64.DEFAULT).joinToString("") { "%02x".format(it) }
 
     private fun buildUapiConfig(): String {
-        val priv = BuildConfig.LIMM_AWG_PRIVKEY.b64toHex()
+        // Per-node override (LimmDiagTest) wins; otherwise the baked DE1 config (failover path).
+        val cfg = pendingConfig
+        val priv = (cfg?.privKeyB64 ?: BuildConfig.LIMM_AWG_PRIVKEY).b64toHex()
         // Server-side params resolved via LimmRemoteConfig (MMKV cache → BuildConfig fallback).
-        val peerPub = LimmRemoteConfig.awgServerPubkey.b64toHex()
-        val endpoint = LimmRemoteConfig.awgEndpoint
+        val peerPub = (cfg?.peerPubB64 ?: LimmRemoteConfig.awgServerPubkey).b64toHex()
+        val endpoint = cfg?.endpoint ?: LimmRemoteConfig.awgEndpoint
         // UAPI uses snake_case keys; AmneziaWG adds jc/jmin/jmax/s1/s2/h1..h4 on the interface.
         return buildString {
             append("private_key=").append(priv).append('\n')
@@ -178,6 +195,8 @@ object LimmAWGTunnel {
                 LogUtil.e(TAG, "Failed to stop AWG tunnel: ${e.message}", e)
             } finally {
                 tunnelHandle = -1
+                // Drop any per-node override so a later production failover uses the baked config.
+                pendingConfig = null
             }
         }
     }

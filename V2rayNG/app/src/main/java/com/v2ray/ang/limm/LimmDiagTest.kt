@@ -4,9 +4,13 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
+import com.v2ray.ang.AppConfig
 import com.v2ray.ang.core.CoreServiceManager
+import com.v2ray.ang.dto.entities.ProfileItem
+import com.v2ray.ang.enums.EConfigType
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SettingsManager
+import com.v2ray.ang.util.MessageUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -49,6 +53,8 @@ object LimmDiagTest {
     private const val EGRESS_TIMEOUT_SEC = 8L       // 15s → 8s: нерабочий профиль не должен висеть
     private const val EGRESS_RETRY_MAX = 2           // 3 → 2: экономим ~8s на провальных профилях
     private const val EGRESS_RETRY_DELAY_MS = 500L
+    private const val AWG_WAIT_MAX_MS = 8_000L       // ожидание подъёма AmneziaWG userspace-туннеля
+    private const val AWG_POLL_MS = 200L
 
     private fun vpnTransportUp(ctx: Context): Boolean = try {
         val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -96,7 +102,121 @@ object LimmDiagTest {
         return null
     }
 
+    /**
+     * Egress probe WITHOUT a SOCKS proxy — used for AmneziaWG, which is a full-TUN tunnel
+     * (allowed_ip 0.0.0.0/0) with no local SOCKS inbound. Traffic routes through the TUN directly.
+     */
+    private fun egressDirect(): String? {
+        val client = OkHttpClient.Builder()
+            .connectTimeout(EGRESS_TIMEOUT_SEC, TimeUnit.SECONDS)
+            .readTimeout(EGRESS_TIMEOUT_SEC, TimeUnit.SECONDS)
+            .build()
+        for (url in listOf("https://api.ipify.org", "https://checkip.amazonaws.com")) {
+            try {
+                client.newCall(Request.Builder().url(url).build())
+                    .execute().use { r -> if (r.isSuccessful) return r.body?.string()?.trim() }
+            } catch (e: Exception) { /* try next */ }
+        }
+        return null
+    }
+
+    /** Poll until the AmneziaWG userspace tunnel reports active, or timeout. */
+    private suspend fun waitAwgActive(): Boolean {
+        val deadline = System.currentTimeMillis() + AWG_WAIT_MAX_MS
+        while (System.currentTimeMillis() < deadline) {
+            if (LimmAWGTunnel.isActive) return true
+            delay(AWG_POLL_MS)
+        }
+        return LimmAWGTunnel.isActive
+    }
+
     private data class ProfileResult(val name: String, val ok: Boolean, val latencyMs: Long?, val egressIp: String? = null)
+
+    /**
+     * AmneziaWG profile test. AWG is NOT an xray-SOCKS profile — it's a userspace TUN tunnel
+     * (LimmAWGTunnel) that takes over the VpnService's TUN fd. Sequence:
+     *   1. select the awg profile + start VpnService (xray-wg establishes the TUN fd; SOCKS up)
+     *   2. set per-node AWG params, send MSG_STATE_SWITCH_AWG → service hands the fd to LimmAWGTunnel
+     *   3. probe egress DIRECTLY (no SOCKS), since the tunnel is full-TUN
+     *   4. teardown: stop AWG, re-register the service receiver (startVService), then stop service
+     */
+    private suspend fun testAwgProfile(
+        ctx: Context, guid: String, name: String, cfg: ProfileItem, socksPort: Int,
+        onProgress: (String) -> Unit
+    ): ProfileResult {
+        if (!LimmAWGTunnel.isAvailable) {
+            onProgress("    ⚪  ▸ $name  (AWG-бэкенд недоступен)")
+            Log.w(TAG, "profile $name: AWG backend unavailable")
+            return ProfileResult(name, false, null)
+        }
+        val host = cfg.server.orEmpty()
+        val port = cfg.serverPort.orEmpty()
+        val priv = cfg.secretKey.orEmpty()
+        val peer = cfg.publicKey.orEmpty()
+        if (host.isEmpty() || port.isEmpty() || priv.isEmpty() || peer.isEmpty()) {
+            onProgress("    ✗  ▸ $name  (нет endpoint/ключей в профиле)")
+            Log.w(TAG, "profile $name: missing awg params host=$host port=$port priv=${priv.isNotEmpty()} peer=${peer.isNotEmpty()}")
+            return ProfileResult(name, false, null)
+        }
+
+        // 1. Establish TUN via xray (select profile + start service). SOCKS coming up == TUN ready.
+        LimmAWGTunnel.pendingConfig = LimmAWGTunnel.AwgConfig("$host:$port", priv, peer)
+        withContext(Dispatchers.Main) {
+            if (!isActive) return@withContext
+            MmkvManager.setSelectServer(guid)
+            CoreServiceManager.startVService(ctx)
+        }
+        val tunReady = waitForSocks(socksPort)
+        if (!tunReady) {
+            onProgress("    ✗  ▸ $name  (VPN/TUN не поднялся)")
+            Log.w(TAG, "profile $name: TUN not ready before AWG switch")
+            LimmAWGTunnel.pendingConfig = null
+            withContext(Dispatchers.Main) { if (isActive) CoreServiceManager.stopVService(ctx) }
+            delay(1500)
+            withContext(Dispatchers.IO) { waitForSocksClosed(socksPort) }
+            return ProfileResult(name, false, null)
+        }
+
+        // 2. Switch tunnel mode to AmneziaWG on the same fd.
+        MessageUtil.sendMsg2Service(ctx, AppConfig.MSG_STATE_SWITCH_AWG, "")
+        val awgUp = waitAwgActive()
+
+        // 3. Direct egress probe (no SOCKS — AWG is full-TUN).
+        val t0 = System.currentTimeMillis()
+        var egress: String? = null
+        if (awgUp) {
+            for (attempt in 1..EGRESS_RETRY_MAX) {
+                egress = withContext(Dispatchers.IO) { egressDirect() }
+                if (egress != null) break
+                if (attempt < EGRESS_RETRY_MAX) {
+                    onProgress("    ↻  попытка ${attempt + 1}/$EGRESS_RETRY_MAX…")
+                    delay(EGRESS_RETRY_DELAY_MS)
+                }
+            }
+        }
+        val ms = System.currentTimeMillis() - t0
+        val ok = egress != null
+        val note = if (ok) "$egress  [${ms}ms]" else if (awgUp) "нет ответа  [${ms}ms]" else "AWG не поднялся"
+        onProgress("    ${if (ok) "✓" else "✗"}  ▸ $name  ($note)")
+        Log.i(TAG, "profile $name (awg): up=$awgUp egress=$egress ok=$ok ms=$ms")
+
+        // 4. Teardown: stop AWG, re-register service receiver (startVService restores it — same
+        //    recovery the MSG_STATE_SWITCH_AWG failure branch uses), then stop the service.
+        LimmAWGTunnel.stopTunnel()
+        delay(300)
+        withContext(Dispatchers.Main) {
+            if (!isActive) return@withContext
+            CoreServiceManager.startVService(ctx)
+        }
+        delay(500)
+        withContext(Dispatchers.Main) {
+            if (!isActive) return@withContext
+            CoreServiceManager.stopVService(ctx)
+        }
+        delay(500)
+        withContext(Dispatchers.IO) { waitForSocksClosed(socksPort) }
+        return ProfileResult(name, ok, if (ok) ms else null, egress)
+    }
 
     private fun postFullTest(ctx: Context, profiles: List<ProfileResult>) {
         if (profiles.isEmpty()) return
@@ -170,6 +290,13 @@ object LimmDiagTest {
             onProgress("⏳  ▸ $name…")
             Log.i(TAG, "--- profile: $name ($guid) ---")
 
+            // AmneziaWG profiles use the userspace-TUN path, not xray-SOCKS.
+            val isAwg = cfg?.configType == EConfigType.WIREGUARD && name.endsWith("-awg", ignoreCase = true)
+            if (isAwg && cfg != null) {
+                profileResults.add(testAwgProfile(ctx, guid, name, cfg, socksPort, onProgress))
+                continue
+            }
+
             withContext(Dispatchers.Main) {
                 if (!isActive) return@withContext
                 MmkvManager.setSelectServer(guid)
@@ -241,7 +368,11 @@ object LimmDiagTest {
 
         // Post-test checkin: switch to best working profile, run full checkin so the
         // dashboard shows correct Статус / Сервисы / Пинг after Full Test.
-        val bestResult = profileResults.filter { it.ok }.minByOrNull { it.latencyMs ?: Long.MAX_VALUE }
+        // Exclude awg from "best": the post-test checkin uses the regular xray path, which can't
+        // serve an AmneziaWG profile (it would start as plain WireGuard and report a broken tunnel).
+        val bestResult = profileResults
+            .filter { it.ok && !it.name.endsWith("-awg", ignoreCase = true) }
+            .minByOrNull { it.latencyMs ?: Long.MAX_VALUE }
         val bestIdx = if (bestResult != null) profileResults.indexOf(bestResult) else -1
         var logUploaded = false
         if (bestIdx >= 0) {
