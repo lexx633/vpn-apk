@@ -43,6 +43,10 @@ import java.net.InetSocketAddress
 
 object CoreServiceManager {
 
+    /** Max time switchToAwgNow waits for the daemon's TUN fd before giving up (E-090 race). */
+    private const val AWG_TUN_WAIT_MS = 8000
+    private const val AWG_TUN_POLL_MS = 250
+
     private val coreController: CoreController = CoreNativeManager.newCoreController(CoreCallback())
     private val mMsgReceive = ReceiveMessageHandler()
     private var currentConfig: ProfileItem? = null
@@ -121,11 +125,22 @@ object CoreServiceManager {
             return
         }
         LogUtil.i("LimmAWGTunnel", "switchToAwgNow: begin")
-        val tunFd = sc.getTunFd()
+        // ACTION_SWITCH_AWG can arrive before CoreVpnService.establish() has set mInterface:
+        // testAwgProfile fires it right after startVService, and waitForSocks can return a
+        // false-positive on a leftover test-core SOCKS port (E-090 race). Poll for the TUN fd
+        // instead of aborting on the first miss — it appears once establish() completes.
+        var tunFd = sc.getTunFd()
+        var waited = 0
+        while (tunFd < 0 && waited < AWG_TUN_WAIT_MS) {
+            Thread.sleep(AWG_TUN_POLL_MS.toLong())
+            waited += AWG_TUN_POLL_MS
+            tunFd = sc.getTunFd()
+        }
         if (tunFd < 0) {
-            LogUtil.e("LimmAWGTunnel", "switchToAwgNow: No TUN fd — aborted (not in VPN mode?)")
+            LogUtil.e("LimmAWGTunnel", "switchToAwgNow: No TUN fd after ${waited}ms — aborted (VPN not established?)")
             return
         }
+        if (waited > 0) LogUtil.i("LimmAWGTunnel", "switchToAwgNow: TUN fd ready after ${waited}ms")
         // Stop xray loop but keep mInterface (the TUN fd) alive; AWG userspace takes it over.
         stopCoreLoop()
         Thread.sleep(200L)
