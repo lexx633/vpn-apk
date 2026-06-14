@@ -240,9 +240,19 @@ object LimmLogReporter {
             "logcat", "-d", "-v", "time", "-t", limit.toString(),
             "-s", "GoLog,LimmDiag,LimmAWGTunnel,$ANG_PACKAGE,AndroidRuntime,System.err,tun2socks"
         ))
+        // Pass 3: native crash buffer — survives the START_STICKY restart loop, so an awgTurnOn
+        // SIGSEGV/SIGABRT or Go panic (which never returns to Kotlin) is captured here even when
+        // the main buffer rotated past it.
+        val crash = try {
+            execLogcat(arrayOf("logcat", "-b", "crash", "-d", "-v", "time", "-t", "300"))
+        } catch (e: Exception) {
+            listOf("crash buffer read failed: ${e.message}")
+        }
         buildList {
             add("=== LimmDiag/AWG (deep) ===")
             addAll(diag)
+            add("=== crash buffer ===")
+            addAll(crash)
             add("=== full tail ===")
             addAll(full)
         }
