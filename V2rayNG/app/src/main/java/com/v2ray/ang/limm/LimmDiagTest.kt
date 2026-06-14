@@ -135,105 +135,28 @@ object LimmDiagTest {
     private data class ProfileResult(val name: String, val ok: Boolean, val latencyMs: Long?, val egressIp: String? = null)
 
     /**
-     * AmneziaWG profile test. AWG is NOT an xray-SOCKS profile — it's a userspace TUN tunnel
-     * (LimmAWGTunnel) that takes over the VpnService's TUN fd. Sequence:
-     *   1. select the awg profile + start VpnService (xray-wg establishes the TUN fd; SOCKS up)
-     *   2. set per-node AWG params, send MSG_STATE_SWITCH_AWG → service hands the fd to LimmAWGTunnel
-     *   3. probe egress DIRECTLY (no SOCKS), since the tunnel is full-TUN
-     *   4. teardown: stop AWG, re-register the service receiver (startVService), then stop service
+     * AmneziaWG profile "test" — SKIPPED inside the full test, by design.
+     *
+     * AWG is a userspace full-TUN tunnel (LimmAWGTunnel) that must take over a LIVE VpnService
+     * TUN fd. The full test runs every profile through a temporary SOCKS core, which holds
+     * coreController.isRunning → startVService early-returns (CoreServiceManager.startContextService)
+     * → CoreVpnService.establish() never runs → getTunFd() stays -1 forever (E-090). So per-node
+     * AWG simply cannot be brought up here. Attempting it wasted ~8s polling and reported a false ✗.
+     *
+     * AWG is now validated where it actually runs: when the user connects to an -awg profile the
+     * daemon routes the established TUN to the native obfuscated backend (CoreVpnService.onStartCommand
+     * → switchToAwgNow). Here we just mark it neutral so it stops polluting the test verdict.
      */
+    @Suppress("UNUSED_PARAMETER")
     private suspend fun testAwgProfile(
         ctx: Context, guid: String, name: String, cfg: ProfileItem, socksPort: Int,
         onProgress: (String) -> Unit
     ): ProfileResult {
-        if (!LimmAWGTunnel.isAvailable) {
-            onProgress("    ⚪  ▸ $name  (AWG-бэкенд недоступен)")
-            Log.w(TAG, "profile $name: AWG backend unavailable")
-            return ProfileResult(name, false, null)
-        }
-        val host = cfg.server.orEmpty()
-        val port = cfg.serverPort.orEmpty()
-        val priv = cfg.secretKey.orEmpty()
-        val peer = cfg.publicKey.orEmpty()
-        if (host.isEmpty() || port.isEmpty() || priv.isEmpty() || peer.isEmpty()) {
-            onProgress("    ✗  ▸ $name  (нет endpoint/ключей в профиле)")
-            Log.w(TAG, "profile $name: missing awg params host=$host port=$port priv=${priv.isNotEmpty()} peer=${peer.isNotEmpty()}")
-            return ProfileResult(name, false, null)
-        }
-
-        // 1. Establish TUN via xray (select profile + start service). SOCKS coming up == TUN ready.
-        withContext(Dispatchers.Main) {
-            if (!isActive) return@withContext
-            MmkvManager.setSelectServer(guid)
-            CoreServiceManager.startVService(ctx)
-        }
-        val tunReady = waitForSocks(socksPort)
-        if (!tunReady) {
-            onProgress("    ✗  ▸ $name  (VPN/TUN не поднялся)")
-            Log.w(TAG, "profile $name: TUN not ready before AWG switch")
-            LimmAWGTunnel.pendingConfig = null
-            withContext(Dispatchers.Main) { if (isActive) CoreServiceManager.stopVService(ctx) }
-            delay(1500)
-            withContext(Dispatchers.IO) { waitForSocksClosed(socksPort) }
-            return ProfileResult(name, false, null)
-        }
-
-        // 2. Switch to AWG via startService(Intent) → CoreVpnService.onStartCommand in the daemon
-        //    process (reliable cross-process; the broadcast never arrived — E-090). Per-node config
-        //    travels in extras because pendingConfig set here (UI process) is invisible to the daemon.
-        withContext(Dispatchers.Main) {
-            if (!isActive) return@withContext
-            val sw = Intent(ctx, CoreVpnService::class.java).apply {
-                action = AppConfig.ACTION_SWITCH_AWG
-                putExtra("awg_endpoint", "$host:$port")
-                putExtra("awg_priv", priv)
-                putExtra("awg_peer", peer)
-            }
-            ctx.startService(sw)
-        }
-
-        // 3. Probe egress DIRECTLY (no SOCKS — AWG is full-TUN). We do NOT gate on
-        //    LimmAWGTunnel.isActive: it's a per-process singleton and the tunnel comes up in the
-        //    DAEMON process, so isActive is always false here in the UI process (E-090 root cause).
-        //    A direct egress reply is the process-independent truth that the tunnel carries traffic.
-        delay(2500)  // give the daemon time to stop xray and bring AWG up on the fd
-        val t0 = System.currentTimeMillis()
-        var egress: String? = null
-        for (attempt in 1..3) {
-            egress = withContext(Dispatchers.IO) { egressDirect() }
-            if (egress != null) break
-            onProgress("    ↻  попытка ${attempt + 1}/3…")
-            delay(EGRESS_RETRY_DELAY_MS)
-        }
-        val ms = System.currentTimeMillis() - t0
-        // AWG is full-TUN: egressDirect goes through the default route. If the tunnel is UP, egress
-        // == the AWG server IP ($host). If the tunnel did NOT come up, the direct probe leaks the
-        // PHONE's own IP and would falsely report ok — so require egress == server IP.
-        val ok = egress != null && egress == host
-        val note = when {
-            ok            -> "$egress  [${ms}ms]"
-            egress != null -> "egress=$egress ≠ $host (туннель не несёт)  [${ms}ms]"
-            else          -> "нет ответа  [${ms}ms]"
-        }
-        onProgress("    ${if (ok) "✓" else "✗"}  ▸ $name  ($note)")
-        Log.i(TAG, "profile $name (awg): egress=$egress host=$host ok=$ok ms=$ms")
-
-        // 4. Teardown: stop AWG, re-register service receiver (startVService restores it — same
-        //    recovery the MSG_STATE_SWITCH_AWG failure branch uses), then stop the service.
-        LimmAWGTunnel.stopTunnel()
-        delay(300)
-        withContext(Dispatchers.Main) {
-            if (!isActive) return@withContext
-            CoreServiceManager.startVService(ctx)
-        }
-        delay(500)
-        withContext(Dispatchers.Main) {
-            if (!isActive) return@withContext
-            CoreServiceManager.stopVService(ctx)
-        }
-        delay(500)
-        withContext(Dispatchers.IO) { waitForSocksClosed(socksPort) }
-        return ProfileResult(name, ok, if (ok) ms else null, egress)
+        val note = if (LimmAWGTunnel.isAvailable) "проверяется при подключении, не в тесте"
+                   else "AWG-бэкенд недоступен"
+        onProgress("    ⚪  ▸ $name  ($note)")
+        Log.i(TAG, "profile $name: AWG skipped in full-test (no live TUN here); validated on real connect")
+        return ProfileResult(name, false, null)
     }
 
     private fun postFullTest(ctx: Context, profiles: List<ProfileResult>) {

@@ -21,6 +21,7 @@ import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.contracts.ServiceControl
 import com.v2ray.ang.contracts.Tun2SocksControl
 import com.v2ray.ang.core.CoreServiceManager
+import com.v2ray.ang.enums.EConfigType
 import com.v2ray.ang.limm.LimmAWGTunnel
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.NotificationManager
@@ -138,6 +139,31 @@ class CoreVpnService : VpnService(), ServiceControl {
         }
 
         NotificationManager.showNotification(null)
+
+        // Manual selection of an -awg profile: stock xray-wireguard cannot speak AmneziaWG
+        // obfuscation (jc/s1/s2/h1..h4) so the server drops the handshake and nothing opens.
+        // Establish the TUN and hand it to the native obfuscated backend (LimmAWGTunnel)
+        // instead of starting xray — same handover switchToAwgNow does on failover.
+        val awgCfg = limmSelectedAwgConfig()
+        if (awgCfg != null && LimmAWGTunnel.isAvailable) {
+            LogUtil.i("LimmAWGTunnel", "onStartCommand: selected -awg profile → native tunnel (ep=${awgCfg.endpoint})")
+            if (LimmAWGTunnel.isActive) LimmAWGTunnel.stopTunnel()
+            LimmAWGTunnel.pendingConfig = awgCfg
+            setupVpnServiceForAwg()
+            // No xray is running, so call startTunnel directly (not switchToAwgNow, whose failure
+            // fallback restarts the service → would re-detect the -awg profile → infinite loop).
+            if (::mInterface.isInitialized) {
+                val up = LimmAWGTunnel.startTunnel(applicationContext, mInterface.fd)
+                if (up) {
+                    LogUtil.i("LimmAWGTunnel", "onStartCommand: AWG tunnel UP on fd=${mInterface.fd}")
+                } else {
+                    LogUtil.e("LimmAWGTunnel", "onStartCommand: AWG tunnel failed to start — stopping service")
+                    stopAllService()
+                }
+            }
+            return START_STICKY
+        }
+
         // If an AWG userspace tunnel is up (from a prior ACTION_SWITCH_AWG), stop it before
         // re-establishing xray — otherwise wg-go keeps the old fd and conflicts. Runs in the
         // daemon process, so LimmAWGTunnel.isActive is authoritative here.
@@ -278,6 +304,45 @@ class CoreVpnService : VpnService(), ServiceControl {
             MyContextWrapper.wrap(newBase, SettingsManager.getLocale())
         }
         super.attachBaseContext(context)
+    }
+
+    /**
+     * Returns the AWG config of the currently selected server iff it is an -awg profile
+     * (WIREGUARD type + remark ending in "-awg"), else null. Mirrors LimmDiagTest's detection
+     * so manual selection and the failover ladder agree on what counts as AWG.
+     */
+    private fun limmSelectedAwgConfig(): LimmAWGTunnel.AwgConfig? {
+        val guid = MmkvManager.getSelectServer() ?: return null
+        val cfg = MmkvManager.decodeServerConfig(guid) ?: return null
+        val isAwg = cfg.configType == EConfigType.WIREGUARD &&
+            cfg.remarks?.endsWith("-awg", ignoreCase = true) == true
+        if (!isAwg) return null
+        val server = cfg.server.orEmpty()
+        val priv = cfg.secretKey.orEmpty()
+        val peer = cfg.publicKey.orEmpty()
+        if (server.isEmpty() || priv.isEmpty() || peer.isEmpty()) {
+            LogUtil.w("LimmAWGTunnel", "selected -awg profile missing endpoint/keys — falling back to xray")
+            return null
+        }
+        return LimmAWGTunnel.AwgConfig("$server:${cfg.serverPort.orEmpty()}", priv, peer)
+    }
+
+    /**
+     * Establish the TUN for the AWG native path WITHOUT runTun2socks: the AmneziaWG userspace
+     * tunnel (wg-go) owns the TUN fd directly, so there is no SOCKS bridge to start.
+     */
+    private fun setupVpnServiceForAwg() {
+        val prepare = prepare(this)
+        if (prepare != null) {
+            LogUtil.e(AppConfig.TAG, "StartCore-VPN(AWG): Permission not granted")
+            stopSelf()
+            return
+        }
+        if (configureVpnService() != true) {
+            LogUtil.e(AppConfig.TAG, "StartCore-VPN(AWG): Configuration failed")
+            stopSelf()
+            return
+        }
     }
 
     /**

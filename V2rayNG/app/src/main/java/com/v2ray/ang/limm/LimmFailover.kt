@@ -1,8 +1,10 @@
 package com.v2ray.ang.limm
 
 import android.content.Context
+import android.content.Intent
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.service.CoreVpnService
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.MessageUtil
 import okhttp3.MediaType.Companion.toMediaType
@@ -174,22 +176,36 @@ object LimmFailover {
     /**
      * §C.4 — переход НА AmneziaWG внутри того же VpnService.
      *
-     * Посылает MSG_STATE_SWITCH_AWG сервису. Обработчик в CoreServiceManager.ReceiveMessageHandler:
-     *   1) останавливает xray-ядро (CoreServiceManager.stopCoreLoop), НЕ закрывая mInterface;
-     *   2) читает tunFd через ServiceControl.getTunFd() (реализован в CoreVpnService);
-     *   3) зовёт LimmAWGTunnel.startTunnel(ctx, tunFd).
+     * Через startService(ACTION_SWITCH_AWG) (НЕ sendBroadcast — он не доходил до демона, E-090):
+     *   CoreVpnService.onStartCommand → switchToAwgNow(): stopCoreLoop (mInterface жив) → getTunFd
+     *   → LimmAWGTunnel.startTunnel. Пер-нодовые ключи едут в extras, т.к. pendingConfig из этого
+     *   процесса невидим демону. Берём их из сохранённого -awg профиля по remark.
      *
-     * Метод возвращает true сразу после постановки команды в очередь — реальный результат
-     * асинхронен (CoreServiceManager обрабатывает сообщение в ReceiveMessageHandler). Если
-     * AWG-бэкенд недоступен — отказываемся немедленно, не постав команду.
+     * Возвращает true сразу после старта сервиса (результат асинхронный). Если AWG-бэкенд
+     * недоступен или профиль без ключей — отказываемся, лестница идёт мимо.
      */
     private fun switchToAwg(ctx: Context): Boolean {
         if (!LimmAWGTunnel.isAvailable) {
             LogUtil.w(TAG, "switchToAwg: AWG-бэкенд недоступен (AAR не слинкован) — пропускаем")
             return false
         }
-        LogUtil.i(TAG, "switchToAwg: отправляем MSG_STATE_SWITCH_AWG сервису")
-        MessageUtil.sendMsg2Service(ctx, AppConfig.MSG_STATE_SWITCH_AWG, "")
+        val guid = findGuidByRemark(AWG_REMARK)
+        val cfg = guid?.let { MmkvManager.decodeServerConfig(it) }
+        val server = cfg?.server.orEmpty()
+        val priv = cfg?.secretKey.orEmpty()
+        val peer = cfg?.publicKey.orEmpty()
+        if (server.isEmpty() || priv.isEmpty() || peer.isEmpty()) {
+            LogUtil.w(TAG, "switchToAwg: профиль «$AWG_REMARK» не найден/без ключей — пропускаем")
+            return false
+        }
+        LogUtil.i(TAG, "switchToAwg: startService(ACTION_SWITCH_AWG) ep=$server:${cfg?.serverPort}")
+        val sw = Intent(ctx, CoreVpnService::class.java).apply {
+            action = AppConfig.ACTION_SWITCH_AWG
+            putExtra("awg_endpoint", "$server:${cfg?.serverPort.orEmpty()}")
+            putExtra("awg_priv", priv)
+            putExtra("awg_peer", peer)
+        }
+        ctx.startService(sw)
         return true
     }
 
