@@ -37,7 +37,7 @@ import java.util.concurrent.TimeUnit
  *  4. Restore original profile
  *  5. Upload applog
  *
- * Max time per profile: ~25s (6s SOCKS wait + 2×8s egress retries + overhead).
+ * Max time per profile: ~30s (6s SOCKS wait + 3×8s egress retries + overhead).
  * XHTTP may return no data on the first request — up to EGRESS_RETRY_MAX attempts are made.
  * ok=true if any egress IP is returned (tunnel up); egress_ip recorded for multi-server analysis.
  */
@@ -54,13 +54,17 @@ object LimmDiagTest {
     private const val SOCKS_CLOSE_MAX_MS = 3_000L  // 6s → 3s: ждём гибели старого xray
     // Бюджет на профиль ограничен (~12s макс): egressViaSocks пробует ОДИН url (ipify), без
     // второго фолбэка — раньше 2 url × таймаут × ретраи давали до 90s на одном профиле («борщ»).
-    private const val EGRESS_TIMEOUT_SEC = 5L        // не-xhttp: 5s × 2 = ~10s
-    private const val EGRESS_RETRY_MAX = 2
+    private const val EGRESS_TIMEOUT_SEC = 5L        // не-xhttp: 5s × 3 = ~15s
+    // 2→3: интермиттентные silent-дропы TCP-коннекта к DE1 (77.90.52.123) на части сетей
+    // съедали обе попытки → DE1/DE1-xhttp (всегда первые в очереди, + холодный старт
+    // VpnService) ложно краснели, хотя DE1 достижим (cf-ws/hy2 проходят). Каждый re-try =
+    // новый REALITY-дозвон; 3-я попытка добивает потерю. Бюджет растёт только на падающих.
+    private const val EGRESS_RETRY_MAX = 3
     private const val EGRESS_RETRY_DELAY_MS = 400L
     // XHTTP профили теперь mode=stream-up (h2 только, без h3-зондирования).
     // Подключение занимает 2-5s вместо ~15s (которые давал h3-probe timeout в mode=auto).
     private const val XHTTP_EGRESS_TIMEOUT_SEC = 8L  // xhttp stream-up: быстрый h2, 8s с запасом
-    private const val XHTTP_EGRESS_RETRY_MAX = 2     // одна попытка повтора на случай transient
+    private const val XHTTP_EGRESS_RETRY_MAX = 3     // 2→3: то же, что и для tcp (DE1-xhttp флапал)
     // hy2 (UDP-handshake) иногда чуть дольше базовых 10s — даём 12s, чтобы не флапал в fail.
     private const val HY2_EGRESS_TIMEOUT_SEC = 6L    // hy2: 6s × 2 = ~12s
     private const val HY2_EGRESS_RETRY_MAX = 2
