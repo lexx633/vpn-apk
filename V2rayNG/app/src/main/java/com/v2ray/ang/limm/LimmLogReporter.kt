@@ -6,6 +6,7 @@ import com.v2ray.ang.AppConfig
 import com.v2ray.ang.AppConfig.ANG_PACKAGE
 import com.v2ray.ang.core.CoreConfigManager
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
 import okhttp3.MediaType.Companion.toMediaType
@@ -14,6 +15,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
 /**
@@ -34,6 +37,13 @@ object LimmLogReporter {
      */
     var cachedDiagResults: JSONArray? = null
 
+    /** True if a local SOCKS inbound is listening (VPN up) — so the upload can ride the tunnel. */
+    private fun isSocksOpen(port: Int): Boolean = try {
+        java.net.Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 400); true }
+    } catch (e: Exception) {
+        false
+    }
+
     /** Runs blocking network/logcat work — call from a background dispatcher. */
     fun send(context: Context): Pair<Boolean, String> {
         if (!LimmConfig.isConfigured() || LimmConfig.token.isEmpty()) {
@@ -41,10 +51,19 @@ object LimmLogReporter {
         }
         return try {
             val payload = build(context)
-            val client = OkHttpClient.Builder()
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(15, TimeUnit.SECONDS)
-                .build()
+            val builder = OkHttpClient.Builder()
+                .connectTimeout(20, TimeUnit.SECONDS)
+                .writeTimeout(40, TimeUnit.SECONDS)   // payload is large (logcat + core_config)
+                .readTimeout(40, TimeUnit.SECONDS)
+            // Route through the local SOCKS inbound when the tunnel is up — a direct POST to
+            // limm.space (CF) on a throttled RU network times out reading the response even though
+            // the server persisted the bundle. Riding the tunnel is what the VPN is for. Mirrors
+            // LimmSelfUpdater. Falls back to direct when SOCKS isn't listening.
+            val socksPort = try { SettingsManager.getSocksPort() } catch (e: Exception) { 0 }
+            if (socksPort > 0 && isSocksOpen(socksPort)) {
+                builder.proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort)))
+            }
+            val client = builder.build()
             val body = payload.toString().toRequestBody("application/json".toMediaType())
             val req = Request.Builder()
                 .url("${LimmConfig.collectorUrl}/api/applog")
