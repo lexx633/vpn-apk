@@ -91,6 +91,7 @@ object LimmLogReporter {
             put("probe", probe())
             put("browser_trace", browserTrace())
             put("logcat", JSONArray(readLogcat()))
+            put("awg_trace", JSONArray(readAwgTrace(context)))
             cachedDiagResults?.let { put("diag_results", it) }
         }
     }
@@ -210,6 +211,14 @@ object LimmLogReporter {
             o.put("error", e.javaClass.simpleName + ": " + (e.message ?: ""))
             o
         }
+    }
+
+    /** Process-shared AWG trace written by LimmAWGTunnel/CoreVpnService on the last -awg connect. */
+    private fun readAwgTrace(ctx: Context): List<String> = try {
+        val f = java.io.File(ctx.applicationContext.filesDir, "awg-trace.log")
+        if (f.exists()) f.readLines().takeLast(40) else listOf("(no awg-trace yet)")
+    } catch (e: Exception) {
+        listOf("awg-trace read failed: ${e.message}")
     }
 
     private fun execLogcat(args: Array<String>): List<String> {

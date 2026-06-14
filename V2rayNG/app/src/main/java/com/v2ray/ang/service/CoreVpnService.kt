@@ -145,21 +145,27 @@ class CoreVpnService : VpnService(), ServiceControl {
         // Establish the TUN and hand it to the native obfuscated backend (LimmAWGTunnel)
         // instead of starting xray — same handover switchToAwgNow does on failover.
         val awgCfg = limmSelectedAwgConfig()
+        LimmAWGTunnel.trace(applicationContext, "onStartCommand: awgCfg=${awgCfg != null} avail=${LimmAWGTunnel.isAvailable} hev=${SettingsManager.isUsingHevTun()}")
         if (awgCfg != null && LimmAWGTunnel.isAvailable) {
             LogUtil.i("LimmAWGTunnel", "onStartCommand: selected -awg profile → native tunnel (ep=${awgCfg.endpoint})")
+            LimmAWGTunnel.trace(applicationContext, "branch ENTER ep=${awgCfg.endpoint}")
             if (LimmAWGTunnel.isActive) LimmAWGTunnel.stopTunnel()
             LimmAWGTunnel.pendingConfig = awgCfg
             setupVpnServiceForAwg()
             // No xray is running, so call startTunnel directly (not switchToAwgNow, whose failure
             // fallback restarts the service → would re-detect the -awg profile → infinite loop).
             if (::mInterface.isInitialized) {
+                LimmAWGTunnel.trace(applicationContext, "TUN established fd=${mInterface.fd} → startTunnel")
                 val up = LimmAWGTunnel.startTunnel(applicationContext, mInterface.fd)
                 if (up) {
                     LogUtil.i("LimmAWGTunnel", "onStartCommand: AWG tunnel UP on fd=${mInterface.fd}")
                 } else {
                     LogUtil.e("LimmAWGTunnel", "onStartCommand: AWG tunnel failed to start — stopping service")
+                    LimmAWGTunnel.trace(applicationContext, "startTunnel FALSE → stopAllService")
                     stopAllService()
                 }
+            } else {
+                LimmAWGTunnel.trace(applicationContext, "ABORT mInterface not initialized (establish failed?)")
             }
             return START_STICKY
         }

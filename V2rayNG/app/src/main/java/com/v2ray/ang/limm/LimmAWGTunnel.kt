@@ -96,6 +96,24 @@ object LimmAWGTunnel {
         }
     }
 
+    /**
+     * Append a line to filesDir/awg-trace.log (capped ~50 lines). The AWG start path runs in the
+     * DAEMON process while the check-in runs in the UI process, so logcat/static fields don't cross
+     * over and the buffer rotates past connect time. A file is process-shared and survives rotation,
+     * so the check-in can always report exactly what happened on the last AWG connect (see
+     * LimmLogReporter.readAwgTrace → payload "awg_trace").
+     */
+    fun trace(ctx: Context, msg: String) {
+        try {
+            val f = java.io.File(ctx.applicationContext.filesDir, "awg-trace.log")
+            val ts = java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.US)
+                .format(java.util.Date())
+            val prev = if (f.exists()) f.readLines().takeLast(49) else emptyList()
+            f.writeText((prev + "$ts  $msg").joinToString("\n"))
+        } catch (_: Throwable) {
+        }
+    }
+
     /** Load libwg-go.so once (the native GoBackend class does not load it itself). */
     private fun ensureLib(ctx: Context): Boolean {
         if (libLoaded) return true
@@ -161,14 +179,19 @@ object LimmAWGTunnel {
     fun startTunnel(ctx: Context, tunFd: Int): Boolean {
         if (!isAvailable) {
             LogUtil.w(TAG, "AWG backend not on classpath — FR1-awg unavailable, skipping")
+            trace(ctx, "startTunnel: ABORT backend unavailable")
             return false
         }
         val effectivePriv = pendingConfig?.privKeyB64 ?: BuildConfig.LIMM_AWG_PRIVKEY
         if (effectivePriv.isEmpty()) {
             LogUtil.w(TAG, "AWG private key missing (no pendingConfig, AWG_CLIENT_PRIVKEY not baked) — cannot start")
+            trace(ctx, "startTunnel: ABORT private key missing")
             return false
         }
-        if (!ensureLib(ctx)) return false
+        if (!ensureLib(ctx)) {
+            trace(ctx, "startTunnel: ABORT ensureLib(wg-go) failed")
+            return false
+        }
         synchronized(lock) {
             if (tunnelHandle >= 0) {
                 LogUtil.i(TAG, "AWG tunnel already up (handle=$tunnelHandle)")
@@ -176,17 +199,21 @@ object LimmAWGTunnel {
             }
             return try {
                 val cfg = buildUapiConfig()
+                trace(ctx, "startTunnel: awgTurnOn fd=$tunFd ep=${pendingConfig?.endpoint ?: "(baked)"}")
                 // Direct call to the fd-based native bridge (org.amnezia.awg.GoBackend).
                 val handle = GoBackend.awgTurnOn(IF_NAME, tunFd, cfg)
                 if (handle < 0) {
                     LogUtil.e(TAG, "awgTurnOn returned $handle — tunnel did not come up")
+                    trace(ctx, "startTunnel: FAIL awgTurnOn returned $handle")
                     return false
                 }
                 tunnelHandle = handle
                 LogUtil.i(TAG, "AWG userspace tunnel UP on fd=$tunFd (handle=$handle)")
+                trace(ctx, "startTunnel: UP handle=$handle fd=$tunFd")
                 true
             } catch (e: Throwable) {
                 LogUtil.e(TAG, "Failed to start AWG tunnel: ${e.message}", e)
+                trace(ctx, "startTunnel: EXC ${e.javaClass.simpleName}: ${e.message}")
                 tunnelHandle = -1
                 false
             }
