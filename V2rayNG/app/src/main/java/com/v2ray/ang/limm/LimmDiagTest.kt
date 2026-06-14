@@ -57,10 +57,10 @@ object LimmDiagTest {
     private const val EGRESS_TIMEOUT_SEC = 5L        // не-xhttp: 5s × 2 = ~10s
     private const val EGRESS_RETRY_MAX = 2
     private const val EGRESS_RETRY_DELAY_MS = 400L
-    // XHTTP (mode=auto, h2/h3 поверх REALITY) реально отдаёт первый байт ~15s на флапающей сети
-    // (FR1-xhttp видели 15.5s). Одна попытка у потолка 15s — ловим рабочий xhttp, но не «борщим».
-    private const val XHTTP_EGRESS_TIMEOUT_SEC = 14L // xhttp: одна попытка ~14s
-    private const val XHTTP_EGRESS_RETRY_MAX = 1
+    // XHTTP профили теперь mode=stream-up (h2 только, без h3-зондирования).
+    // Подключение занимает 2-5s вместо ~15s (которые давал h3-probe timeout в mode=auto).
+    private const val XHTTP_EGRESS_TIMEOUT_SEC = 8L  // xhttp stream-up: быстрый h2, 8s с запасом
+    private const val XHTTP_EGRESS_RETRY_MAX = 2     // одна попытка повтора на случай transient
     // hy2 (UDP-handshake) иногда чуть дольше базовых 10s — даём 12s, чтобы не флапал в fail.
     private const val HY2_EGRESS_TIMEOUT_SEC = 6L    // hy2: 6s × 2 = ~12s
     private const val HY2_EGRESS_RETRY_MAX = 2
@@ -216,8 +216,7 @@ object LimmDiagTest {
             }
 
             val t0 = System.currentTimeMillis()
-            // XHTTP (mode=auto, h2/h3 поверх REALITY) медленный на первый байт → больше времени и
-            // попыток, иначе ложный fail. Остальным транспортам хватает базовых значений.
+            // XHTTP профили mode=stream-up (h2, без h3-probe) — быстрый, но чуть больше времени чем tcp.
             val isXhttp = name.endsWith("-xhttp", ignoreCase = true)
             val isHy2 = name.endsWith("-hy2", ignoreCase = true)
             val egTimeout = when { isXhttp -> XHTTP_EGRESS_TIMEOUT_SEC; isHy2 -> HY2_EGRESS_TIMEOUT_SEC; else -> EGRESS_TIMEOUT_SEC }
