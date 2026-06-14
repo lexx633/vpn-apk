@@ -1,10 +1,8 @@
 package com.v2ray.ang.limm
 
 import android.content.Context
-import android.content.Intent
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.handler.MmkvManager
-import com.v2ray.ang.service.CoreVpnService
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.MessageUtil
 import okhttp3.MediaType.Companion.toMediaType
@@ -34,22 +32,8 @@ object LimmFailover {
 
     private const val TAG = "LimmFailover"
 
-    /** Маркер AWG-режима: это НЕ обычный xray-профиль, а команда «переключить туннель на AmneziaWG
-     *  внутри того же VpnService» (см. LimmAWGTunnel, §C.4). В лестнице стоит перед FR1-wg. */
-    const val AWG_REMARK = "FR1-awg"
-
-    /**
-     * Полная лестница. FR1-awg обфусцирован → «сильнее» голого FR1-wg, поэтому идёт перед ним.
-     * Но FR1-awg включается в АВТО-лестницу только если нативный AWG-бэкенд реально слинкован
-     * (LimmAWGTunnel.isAvailable) — иначе [activeLadder] его выкидывает и failover идёт мимо
-     * (поведение fallback §C.6 без падений, пока AAR не подключён).
-     */
-    val TRANSPORT_LADDER = listOf("FR1-xhttp", "FR1-cf", "FR1-hy2", AWG_REMARK, "FR1-wg", "FR1")
-
-    /** Лестница с учётом доступности AWG: без FR1-awg, пока нативный бэкенд не слинкован. */
-    private fun activeLadder(): List<String> =
-        if (LimmAWGTunnel.isAvailable) TRANSPORT_LADDER
-        else TRANSPORT_LADDER.filter { it != AWG_REMARK }
+    /** Лестница приоритетов транспорта (от лучшего к fallback). */
+    val TRANSPORT_LADDER = listOf("FR1-xhttp", "FR1-cf", "FR1-hy2", "FR1-wg", "FR1")
 
     /** Минимальный интервал между переключениями (мс). */
     private const val COOLDOWN_MS = 5 * 60 * 1000L // 5 минут
@@ -101,11 +85,9 @@ object LimmFailover {
             LogUtil.w(TAG, "Профиль $currentGuid не найден в хранилище")
             return
         }
-        // Если активен AWG-режим — текущего «профиля» в MMKV нет (AWG это не xray-профиль),
-        // determineCurrentRemark разрулит это ниже. Берём «эффективный» текущий remark.
-        val currentRemark = if (LimmAWGTunnel.isActive) AWG_REMARK else currentProfile.remarks
+        val currentRemark = currentProfile.remarks
 
-        val ladder = activeLadder()
+        val ladder = TRANSPORT_LADDER
 
         // Проверяем, входит ли текущий профиль в лестницу.
         val ladderIdx = ladder.indexOf(currentRemark)
@@ -119,28 +101,7 @@ object LimmFailover {
         LogUtil.i(TAG, "L3 FAIL: переключение $currentRemark → $nextRemark")
 
         try {
-            // §C.4: FR1-awg — это НЕ выбор xray-профиля, а переключение режима туннеля внутри
-            // того же VpnService. Поэтому путь переключения раздвоен:
-            when {
-                // (a) Уходим НА AWG: остановить xray-ядро и поднять AWG userspace поверх того же
-                //     TUN-fd. Реальный handover fd делает сервис (см. open questions в коммите).
-                nextRemark == AWG_REMARK -> {
-                    if (!switchToAwg(ctx)) {
-                        LogUtil.w(TAG, "Переход на AWG не удался — лестница продолжит на след. шаге")
-                        return
-                    }
-                }
-                // (b) Уходим С AWG на любой xray-транспорт: погасить AWG, вернуть fd, выбрать
-                //     xray-профиль и перезапустить сервис как обычно.
-                currentRemark == AWG_REMARK -> {
-                    LimmAWGTunnel.stopTunnel()
-                    if (!selectXrayProfile(ctx, nextRemark)) return
-                }
-                // (c) Обычный xray→xray переход — как раньше.
-                else -> {
-                    if (!selectXrayProfile(ctx, nextRemark)) return
-                }
-            }
+            if (!selectXrayProfile(ctx, nextRemark)) return
 
             // Сохраняем состояние переключения.
             prefs.edit()
@@ -170,42 +131,6 @@ object LimmFailover {
         MmkvManager.setSelectServer(nextGuid)
         MessageUtil.sendMsg2Service(ctx, AppConfig.MSG_STATE_RESTART, "")
         LogUtil.i(TAG, "xray-профиль переключён → $remark (guid=$nextGuid)")
-        return true
-    }
-
-    /**
-     * §C.4 — переход НА AmneziaWG внутри того же VpnService.
-     *
-     * Через startService(ACTION_SWITCH_AWG) (НЕ sendBroadcast — он не доходил до демона, E-090):
-     *   CoreVpnService.onStartCommand → switchToAwgNow(): stopCoreLoop (mInterface жив) → getTunFd
-     *   → LimmAWGTunnel.startTunnel. Пер-нодовые ключи едут в extras, т.к. pendingConfig из этого
-     *   процесса невидим демону. Берём их из сохранённого -awg профиля по remark.
-     *
-     * Возвращает true сразу после старта сервиса (результат асинхронный). Если AWG-бэкенд
-     * недоступен или профиль без ключей — отказываемся, лестница идёт мимо.
-     */
-    private fun switchToAwg(ctx: Context): Boolean {
-        if (!LimmAWGTunnel.isAvailable) {
-            LogUtil.w(TAG, "switchToAwg: AWG-бэкенд недоступен (AAR не слинкован) — пропускаем")
-            return false
-        }
-        val guid = findGuidByRemark(AWG_REMARK)
-        val cfg = guid?.let { MmkvManager.decodeServerConfig(it) }
-        val server = cfg?.server.orEmpty()
-        val priv = cfg?.secretKey.orEmpty()
-        val peer = cfg?.publicKey.orEmpty()
-        if (server.isEmpty() || priv.isEmpty() || peer.isEmpty()) {
-            LogUtil.w(TAG, "switchToAwg: профиль «$AWG_REMARK» не найден/без ключей — пропускаем")
-            return false
-        }
-        LogUtil.i(TAG, "switchToAwg: startService(ACTION_SWITCH_AWG) ep=$server:${cfg?.serverPort}")
-        val sw = Intent(ctx, CoreVpnService::class.java).apply {
-            action = AppConfig.ACTION_SWITCH_AWG
-            putExtra("awg_endpoint", "$server:${cfg?.serverPort.orEmpty()}")
-            putExtra("awg_priv", priv)
-            putExtra("awg_peer", peer)
-        }
-        ctx.startService(sw)
         return true
     }
 

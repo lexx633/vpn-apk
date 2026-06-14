@@ -11,8 +11,8 @@ import java.util.concurrent.TimeUnit
 /**
  * Remote server config — fetches https://limm.space/vpn/server-config.json and caches in MMKV.
  *
- * Purpose: lets us update server params (IP, REALITY keys, AWG pubkey/endpoint, obfuscation)
- * without rebuilding the APK. When migrating to a new server, just update server-config.json on
+ * Purpose: lets us update server params (IP, REALITY keys) without rebuilding the APK.
+ * When migrating to a new server, just update server-config.json on
  * limm.space → all active apps pick it up within 24 h via the periodic checkin worker.
  *
  * Architecture:
@@ -23,7 +23,7 @@ import java.util.concurrent.TimeUnit
  *   3. [isStale] is true when there is no cached data or when the cache is older than 24 h.
  *      LimmCheckinWorker calls [refresh] when stale (runs on IO dispatcher, blocking is fine).
  *
- * Secrets NOT in this file: UUID, token, AWG client private key — those never leave BuildConfig
+ * Secrets NOT in this file: UUID, token — those never leave BuildConfig
  * (baked from the gitignored limm.properties via CI). The JSON contains only non-secret infra
  * params that change when moving between servers.
  */
@@ -49,19 +49,6 @@ object LimmRemoteConfig {
     private const val KEY_REALITY_SID     = "reality_sid"
     private const val KEY_REALITY_FLOW    = "reality_flow"
     private const val KEY_REALITY_FP      = "reality_fp"
-    private const val KEY_AWG_SERVER_PUBKEY = "awg_server_pubkey"
-    private const val KEY_AWG_ENDPOINT    = "awg_endpoint"
-    private const val KEY_AWG_ADDRESS     = "awg_address"
-    private const val KEY_AWG_DNS         = "awg_dns"
-    private const val KEY_AWG_JC          = "awg_jc"
-    private const val KEY_AWG_JMIN        = "awg_jmin"
-    private const val KEY_AWG_JMAX        = "awg_jmax"
-    private const val KEY_AWG_S1          = "awg_s1"
-    private const val KEY_AWG_S2          = "awg_s2"
-    private const val KEY_AWG_H1          = "awg_h1"
-    private const val KEY_AWG_H2          = "awg_h2"
-    private const val KEY_AWG_H3          = "awg_h3"
-    private const val KEY_AWG_H4          = "awg_h4"
 
     // ── Helpers ────────────────────────────────────────────────────────────────────────────────
 
@@ -79,19 +66,6 @@ object LimmRemoteConfig {
     val realitySid: String      get() = str(KEY_REALITY_SID,      BuildConfig.LIMM_REALITY_SID)
     val realityFlow: String     get() = str(KEY_REALITY_FLOW,     BuildConfig.LIMM_REALITY_FLOW)
     val realityFp: String       get() = str(KEY_REALITY_FP,       BuildConfig.LIMM_REALITY_FP)
-    val awgServerPubkey: String get() = str(KEY_AWG_SERVER_PUBKEY, BuildConfig.LIMM_AWG_SERVER_PUBKEY)
-    val awgEndpoint: String     get() = str(KEY_AWG_ENDPOINT,     BuildConfig.LIMM_AWG_ENDPOINT)
-    val awgAddress: String      get() = str(KEY_AWG_ADDRESS,      BuildConfig.LIMM_AWG_ADDRESS)
-    val awgDns: String          get() = str(KEY_AWG_DNS,          BuildConfig.LIMM_AWG_DNS)
-    val awgJc: String           get() = str(KEY_AWG_JC,           BuildConfig.LIMM_AWG_JC)
-    val awgJmin: String         get() = str(KEY_AWG_JMIN,         BuildConfig.LIMM_AWG_JMIN)
-    val awgJmax: String         get() = str(KEY_AWG_JMAX,         BuildConfig.LIMM_AWG_JMAX)
-    val awgS1: String           get() = str(KEY_AWG_S1,           BuildConfig.LIMM_AWG_S1)
-    val awgS2: String           get() = str(KEY_AWG_S2,           BuildConfig.LIMM_AWG_S2)
-    val awgH1: String           get() = str(KEY_AWG_H1,           BuildConfig.LIMM_AWG_H1)
-    val awgH2: String           get() = str(KEY_AWG_H2,           BuildConfig.LIMM_AWG_H2)
-    val awgH3: String           get() = str(KEY_AWG_H3,           BuildConfig.LIMM_AWG_H3)
-    val awgH4: String           get() = str(KEY_AWG_H4,           BuildConfig.LIMM_AWG_H4)
 
     // ── Cache freshness ────────────────────────────────────────────────────────────────────────
 
@@ -154,19 +128,6 @@ object LimmRemoteConfig {
         s("reality_sid",       KEY_REALITY_SID)
         s("reality_flow",      KEY_REALITY_FLOW)
         s("reality_fp",        KEY_REALITY_FP)
-        s("awg_server_pubkey", KEY_AWG_SERVER_PUBKEY)
-        s("awg_endpoint",      KEY_AWG_ENDPOINT)
-        s("awg_address",       KEY_AWG_ADDRESS)
-        s("awg_dns",           KEY_AWG_DNS)
-        s("awg_jc",            KEY_AWG_JC)
-        s("awg_jmin",          KEY_AWG_JMIN)
-        s("awg_jmax",          KEY_AWG_JMAX)
-        s("awg_s1",            KEY_AWG_S1)
-        s("awg_s2",            KEY_AWG_S2)
-        s("awg_h1",            KEY_AWG_H1)
-        s("awg_h2",            KEY_AWG_H2)
-        s("awg_h3",            KEY_AWG_H3)
-        s("awg_h4",            KEY_AWG_H4)
         kv.encode(KEY_TS, System.currentTimeMillis())
     }
 }

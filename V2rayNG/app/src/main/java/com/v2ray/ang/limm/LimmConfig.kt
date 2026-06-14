@@ -10,7 +10,7 @@ import java.util.UUID
 /**
  * limm VPN — central config for the embedded server profile and the monitoring check-in.
  * Secrets (UUID/token) arrive via BuildConfig from the gitignored limm.properties.
- * Non-secret server params (IP, REALITY keys, AWG endpoint) come from [LimmRemoteConfig]
+ * Non-secret server params (IP, REALITY keys) come from [LimmRemoteConfig]
  * which fetches server-config.json and caches in MMKV — BuildConfig is the offline fallback.
  */
 object LimmConfig {

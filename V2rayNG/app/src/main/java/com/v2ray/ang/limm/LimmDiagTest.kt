@@ -1,17 +1,13 @@
 package com.v2ray.ang.limm
 
 import android.content.Context
-import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
-import com.v2ray.ang.AppConfig
 import com.v2ray.ang.core.CoreServiceManager
 import com.v2ray.ang.dto.entities.ProfileItem
-import com.v2ray.ang.enums.EConfigType
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SettingsManager
-import com.v2ray.ang.service.CoreVpnService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -115,49 +111,7 @@ object LimmDiagTest {
         return null
     }
 
-    /**
-     * Egress probe WITHOUT a SOCKS proxy — used for AmneziaWG, which is a full-TUN tunnel
-     * (allowed_ip 0.0.0.0/0) with no local SOCKS inbound. Traffic routes through the TUN directly.
-     */
-    private fun egressDirect(): String? {
-        val client = OkHttpClient.Builder()
-            .connectTimeout(EGRESS_TIMEOUT_SEC, TimeUnit.SECONDS)
-            .readTimeout(EGRESS_TIMEOUT_SEC, TimeUnit.SECONDS)
-            .build()
-        try {
-            client.newCall(Request.Builder().url("https://api.ipify.org").build())
-                .execute().use { r -> if (r.isSuccessful) return r.body?.string()?.trim() }
-        } catch (e: Exception) { /* timeout/fail → null */ }
-        return null
-    }
-
-
     private data class ProfileResult(val name: String, val ok: Boolean, val latencyMs: Long?, val egressIp: String? = null)
-
-    /**
-     * AmneziaWG profile "test" — SKIPPED inside the full test, by design.
-     *
-     * AWG is a userspace full-TUN tunnel (LimmAWGTunnel) that must take over a LIVE VpnService
-     * TUN fd. The full test runs every profile through a temporary SOCKS core, which holds
-     * coreController.isRunning → startVService early-returns (CoreServiceManager.startContextService)
-     * → CoreVpnService.establish() never runs → getTunFd() stays -1 forever (E-090). So per-node
-     * AWG simply cannot be brought up here. Attempting it wasted ~8s polling and reported a false ✗.
-     *
-     * AWG is now validated where it actually runs: when the user connects to an -awg profile the
-     * daemon routes the established TUN to the native obfuscated backend (CoreVpnService.onStartCommand
-     * → switchToAwgNow). Here we just mark it neutral so it stops polluting the test verdict.
-     */
-    @Suppress("UNUSED_PARAMETER")
-    private suspend fun testAwgProfile(
-        ctx: Context, guid: String, name: String, cfg: ProfileItem, socksPort: Int,
-        onProgress: (String) -> Unit
-    ): ProfileResult {
-        val note = if (LimmAWGTunnel.isAvailable) "проверяется при подключении, не в тесте"
-                   else "AWG-бэкенд недоступен"
-        onProgress("    ⚪  ▸ $name  ($note)")
-        Log.i(TAG, "profile $name: AWG skipped in full-test (no live TUN here); validated on real connect")
-        return ProfileResult(name, false, null)
-    }
 
     private fun postFullTest(ctx: Context, profiles: List<ProfileResult>) {
         if (profiles.isEmpty()) return
@@ -231,15 +185,15 @@ object LimmDiagTest {
             val cfg = MmkvManager.decodeServerConfig(guid)
             val name = cfg?.remarks?.takeIf { it.isNotEmpty() } ?: guid.take(8)
 
-            onProgress("⏳  ▸ $name…")
-            Log.i(TAG, "--- profile: $name ($guid) ---")
-
-            // AmneziaWG profiles use the userspace-TUN path, not xray-SOCKS.
-            val isAwg = cfg?.configType == EConfigType.WIREGUARD && name.endsWith("-awg", ignoreCase = true)
-            if (isAwg && cfg != null) {
-                profileResults.add(testAwgProfile(ctx, guid, name, cfg, socksPort, onProgress))
+            // Skip any leftover -awg profiles: AWG was removed, so testing one as plain xray
+            // WireGuard would just report a broken tunnel and pollute the verdict.
+            if (name.endsWith("-awg", ignoreCase = true)) {
+                onProgress("    ⚪  ▸ $name  (AWG больше не поддерживается)")
                 continue
             }
+
+            onProgress("⏳  ▸ $name…")
+            Log.i(TAG, "--- profile: $name ($guid) ---")
 
             withContext(Dispatchers.Main) {
                 if (!isActive) return@withContext
@@ -316,10 +270,8 @@ object LimmDiagTest {
 
         // Post-test checkin: switch to best working profile, run full checkin so the
         // dashboard shows correct Статус / Сервисы / Пинг after Full Test.
-        // Exclude awg from "best": the post-test checkin uses the regular xray path, which can't
-        // serve an AmneziaWG profile (it would start as plain WireGuard and report a broken tunnel).
         val bestResult = profileResults
-            .filter { it.ok && !it.name.endsWith("-awg", ignoreCase = true) }
+            .filter { it.ok }
             .minByOrNull { it.latencyMs ?: Long.MAX_VALUE }
         val bestIdx = if (bestResult != null) profileResults.indexOf(bestResult) else -1
         var logUploaded = false

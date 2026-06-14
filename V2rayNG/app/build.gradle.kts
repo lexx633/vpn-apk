@@ -35,8 +35,8 @@ android {
         applicationId = "space.limm.vpn"
         minSdk = 24
         targetSdk = 37
-        versionCode = 790
-        versionName = "2.2.3.66"
+        versionCode = 791
+        versionName = "2.2.3.67"
         multiDexEnabled = true
 
         // limm VPN config — non-secret REALITY params baked, secrets from limm.properties
@@ -53,27 +53,6 @@ android {
         buildConfigField("String", "LIMM_REALITY_FP", "\"chrome\"")
         buildConfigField("String", "LIMM_COLLECTOR_URL", "\"https://limm.space\"")
         buildConfigField("String", "LIMM_BUILD", "\"${limmBuildHash}\"")
-
-        // --- AmneziaWG (FR1-awg) transport ---
-        // Secret: the AWG client private key is baked from limm.properties (CI injects it from
-        // the AWG_CLIENT_PRIVKEY build secret, mirrored from C:\_vpn\.env). NEVER commit the key —
-        // limm.properties is gitignored, exactly like LIMM_TOKEN / LIMM_VLESS_UUID above.
-        buildConfigField("String", "LIMM_AWG_PRIVKEY", "\"${limm("AWG_CLIENT_PRIVKEY")}\"")
-        // Non-secret AWG params (server pubkey, endpoint, address, obfuscation Jc/Jmin/Jmax/S1/S2/H1-H4).
-        // Mirrors C:\_vpn\client\awg-fr1.conf — safe to bake in clear (they match the server side).
-        buildConfigField("String", "LIMM_AWG_SERVER_PUBKEY", "\"CwvRZhMOWyvQj4UOmOhOHJvcS/p/DaFx/1qTPzdAqmw=\"")
-        buildConfigField("String", "LIMM_AWG_ENDPOINT", "\"77.90.52.123:51820\"")
-        buildConfigField("String", "LIMM_AWG_ADDRESS", "\"10.8.0.2/24\"")
-        buildConfigField("String", "LIMM_AWG_DNS", "\"1.1.1.1\"")
-        buildConfigField("String", "LIMM_AWG_JC", "\"4\"")
-        buildConfigField("String", "LIMM_AWG_JMIN", "\"40\"")
-        buildConfigField("String", "LIMM_AWG_JMAX", "\"70\"")
-        buildConfigField("String", "LIMM_AWG_S1", "\"0\"")
-        buildConfigField("String", "LIMM_AWG_S2", "\"0\"")
-        buildConfigField("String", "LIMM_AWG_H1", "\"601260931\"")
-        buildConfigField("String", "LIMM_AWG_H2", "\"578771134\"")
-        buildConfigField("String", "LIMM_AWG_H3", "\"1732336072\"")
-        buildConfigField("String", "LIMM_AWG_H4", "\"2588686224\"")
 
         val abiFilterList = (properties["ABI_FILTERS"] as? String)?.split(';')
         splits {
@@ -261,13 +240,6 @@ dependencies {
 
     // Multidex Support
     implementation(libs.multidex)
-
-    // --- AmneziaWG (FR1-awg) userspace tunnel ---
-    // AAR vendored from lexx633/amneziawg-android release aar-6ee4fe1 (built via GitHub Actions).
-    // File: app/libs/amneziawg-tunnel.aar (gitignored binary, 5.8 MB with arm64/armeabi-v7a .so).
-    // fileTree("libs") above picks it up automatically — no separate implementation() needed.
-    // To update: gh release download <tag> --repo lexx633/amneziawg-android --pattern "amneziawg-tunnel.aar" --dir app/libs/
-    // LimmAWGTunnel.isAvailable = true once this AAR is present → FR1-awg enters the active ladder.
 
     // Testing Libraries
     testImplementation(libs.junit)

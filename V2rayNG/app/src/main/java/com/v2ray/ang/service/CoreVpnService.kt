@@ -21,8 +21,6 @@ import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.contracts.ServiceControl
 import com.v2ray.ang.contracts.Tun2SocksControl
 import com.v2ray.ang.core.CoreServiceManager
-import com.v2ray.ang.enums.EConfigType
-import com.v2ray.ang.limm.LimmAWGTunnel
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.NotificationManager
 import com.v2ray.ang.handler.SettingsManager
@@ -123,60 +121,7 @@ class CoreVpnService : VpnService(), ServiceControl {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         LogUtil.i(AppConfig.TAG, "StartCore-VPN: Service command received")
 
-        // AWG switch via startService(Intent) — runs in THIS (daemon) process where the TUN fd
-        // lives. Reliable cross-process, unlike sendBroadcast (E-090). Per-node config arrives in
-        // extras because LimmAWGTunnel.pendingConfig set in the UI process is invisible here.
-        if (intent?.action == AppConfig.ACTION_SWITCH_AWG) {
-            val ep = intent.getStringExtra("awg_endpoint").orEmpty()
-            val priv = intent.getStringExtra("awg_priv").orEmpty()
-            val peer = intent.getStringExtra("awg_peer").orEmpty()
-            if (ep.isNotEmpty() && priv.isNotEmpty() && peer.isNotEmpty()) {
-                LimmAWGTunnel.pendingConfig = LimmAWGTunnel.AwgConfig(ep, priv, peer)
-            }
-            LogUtil.i("LimmAWGTunnel", "onStartCommand: ACTION_SWITCH_AWG (ep=$ep)")
-            CoreServiceManager.switchToAwgNow()
-            return START_STICKY
-        }
-
         NotificationManager.showNotification(null)
-
-        // Manual selection of an -awg profile: stock xray-wireguard cannot speak AmneziaWG
-        // obfuscation (jc/s1/s2/h1..h4) so the server drops the handshake and nothing opens.
-        // Establish the TUN and hand it to the native obfuscated backend (LimmAWGTunnel)
-        // instead of starting xray — same handover switchToAwgNow does on failover.
-        val awgCfg = limmSelectedAwgConfig()
-        LimmAWGTunnel.trace(applicationContext, "onStartCommand: awgCfg=${awgCfg != null} avail=${LimmAWGTunnel.isAvailable} hev=${SettingsManager.isUsingHevTun()}")
-        if (awgCfg != null && LimmAWGTunnel.isAvailable) {
-            LogUtil.i("LimmAWGTunnel", "onStartCommand: selected -awg profile → native tunnel (ep=${awgCfg.endpoint})")
-            LimmAWGTunnel.trace(applicationContext, "branch ENTER ep=${awgCfg.endpoint}")
-            if (LimmAWGTunnel.isActive) LimmAWGTunnel.stopTunnel()
-            LimmAWGTunnel.pendingConfig = awgCfg
-            setupVpnServiceForAwg()
-            // No xray is running, so call startTunnel directly (not switchToAwgNow, whose failure
-            // fallback restarts the service → would re-detect the -awg profile → infinite loop).
-            if (::mInterface.isInitialized) {
-                LimmAWGTunnel.trace(applicationContext, "TUN established fd=${mInterface.fd} → startTunnel")
-                val up = LimmAWGTunnel.startTunnel(applicationContext, mInterface.fd)
-                if (up) {
-                    LogUtil.i("LimmAWGTunnel", "onStartCommand: AWG tunnel UP on fd=${mInterface.fd}")
-                } else {
-                    LogUtil.e("LimmAWGTunnel", "onStartCommand: AWG tunnel failed to start — stopping service")
-                    LimmAWGTunnel.trace(applicationContext, "startTunnel FALSE → stopAllService")
-                    stopAllService()
-                }
-            } else {
-                LimmAWGTunnel.trace(applicationContext, "ABORT mInterface not initialized (establish failed?)")
-            }
-            return START_STICKY
-        }
-
-        // If an AWG userspace tunnel is up (from a prior ACTION_SWITCH_AWG), stop it before
-        // re-establishing xray — otherwise wg-go keeps the old fd and conflicts. Runs in the
-        // daemon process, so LimmAWGTunnel.isActive is authoritative here.
-        if (LimmAWGTunnel.isActive) {
-            LogUtil.i("LimmAWGTunnel", "onStartCommand: stopping active AWG before xray start")
-            LimmAWGTunnel.stopTunnel()
-        }
         if (SettingsManager.isUsingHevTun()) {
             // hev-tun mode: xray uses tunFd=0 (SOCKS-only), hev-tun bridges TUN→SOCKS.
             // Pre-start xray in background so SOCKS is ready before TUN is established —
@@ -295,60 +240,11 @@ class CoreVpnService : VpnService(), ServiceControl {
         return protect(socket)
     }
 
-    /**
-     * Returns the raw fd of the established TUN ParcelFileDescriptor.
-     * Called by CoreServiceManager when handling MSG_STATE_SWITCH_AWG so that
-     * LimmAWGTunnel can reuse the existing TUN interface instead of opening a new VpnService.
-     * The fd remains owned by [mInterface]; callers must NOT close it.
-     */
-    override fun getTunFd(): Int {
-        return if (::mInterface.isInitialized) mInterface.fd else -1
-    }
-
     override fun attachBaseContext(newBase: Context?) {
         val context = newBase?.let {
             MyContextWrapper.wrap(newBase, SettingsManager.getLocale())
         }
         super.attachBaseContext(context)
-    }
-
-    /**
-     * Returns the AWG config of the currently selected server iff it is an -awg profile
-     * (WIREGUARD type + remark ending in "-awg"), else null. Mirrors LimmDiagTest's detection
-     * so manual selection and the failover ladder agree on what counts as AWG.
-     */
-    private fun limmSelectedAwgConfig(): LimmAWGTunnel.AwgConfig? {
-        val guid = MmkvManager.getSelectServer() ?: return null
-        val cfg = MmkvManager.decodeServerConfig(guid) ?: return null
-        val isAwg = cfg.configType == EConfigType.WIREGUARD &&
-            cfg.remarks?.endsWith("-awg", ignoreCase = true) == true
-        if (!isAwg) return null
-        val server = cfg.server.orEmpty()
-        val priv = cfg.secretKey.orEmpty()
-        val peer = cfg.publicKey.orEmpty()
-        if (server.isEmpty() || priv.isEmpty() || peer.isEmpty()) {
-            LogUtil.w("LimmAWGTunnel", "selected -awg profile missing endpoint/keys — falling back to xray")
-            return null
-        }
-        return LimmAWGTunnel.AwgConfig("$server:${cfg.serverPort.orEmpty()}", priv, peer)
-    }
-
-    /**
-     * Establish the TUN for the AWG native path WITHOUT runTun2socks: the AmneziaWG userspace
-     * tunnel (wg-go) owns the TUN fd directly, so there is no SOCKS bridge to start.
-     */
-    private fun setupVpnServiceForAwg() {
-        val prepare = prepare(this)
-        if (prepare != null) {
-            LogUtil.e(AppConfig.TAG, "StartCore-VPN(AWG): Permission not granted")
-            stopSelf()
-            return
-        }
-        if (configureVpnService() != true) {
-            LogUtil.e(AppConfig.TAG, "StartCore-VPN(AWG): Configuration failed")
-            stopSelf()
-            return
-        }
     }
 
     /**

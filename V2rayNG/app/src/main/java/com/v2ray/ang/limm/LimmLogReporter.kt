@@ -91,7 +91,6 @@ object LimmLogReporter {
             put("probe", probe())
             put("browser_trace", browserTrace())
             put("logcat", JSONArray(readLogcat()))
-            put("awg_trace", JSONArray(readAwgTrace(context)))
             cachedDiagResults?.let { put("diag_results", it) }
         }
     }
@@ -213,14 +212,6 @@ object LimmLogReporter {
         }
     }
 
-    /** Process-shared AWG trace written by LimmAWGTunnel/CoreVpnService on the last -awg connect. */
-    private fun readAwgTrace(ctx: Context): List<String> = try {
-        val f = java.io.File(ctx.applicationContext.filesDir, "awg-trace.log")
-        if (f.exists()) f.readLines().takeLast(40) else listOf("(no awg-trace yet)")
-    } catch (e: Exception) {
-        listOf("awg-trace read failed: ${e.message}")
-    }
-
     private fun execLogcat(args: Array<String>): List<String> {
         val proc = Runtime.getRuntime().exec(args)
         return try { proc.inputStream.bufferedReader().use { it.readLines() } }
@@ -228,31 +219,19 @@ object LimmLogReporter {
     }
 
     private fun readLogcat(limit: Int = 2000): List<String> = try {
-        // Pass 1: sparse Limm diagnostics only (esp. LimmAWGTunnel awgTurnOn failures). These tags
-        // emit few lines, so a deep -t reaches back through the WHOLE test even when GoLog floods
-        // the buffer — the bounded full pass below pushes them out of its window (that's why AWG
-        // errors were never captured before).
+        // Pass 1: sparse Limm diagnostics only. These tags emit few lines, so a deep -t reaches
+        // back through the WHOLE test even when GoLog floods the buffer.
         val diag = execLogcat(arrayOf(
-            "logcat", "-d", "-v", "time", "-t", "20000", "-s", "LimmDiag,LimmAWGTunnel"
+            "logcat", "-d", "-v", "time", "-t", "20000", "-s", "LimmDiag"
         ))
         // Pass 2: full context (xray GoLog + app), bounded.
         val full = execLogcat(arrayOf(
             "logcat", "-d", "-v", "time", "-t", limit.toString(),
-            "-s", "GoLog,LimmDiag,LimmAWGTunnel,$ANG_PACKAGE,AndroidRuntime,System.err,tun2socks"
+            "-s", "GoLog,LimmDiag,$ANG_PACKAGE,AndroidRuntime,System.err,tun2socks"
         ))
-        // Pass 3: native crash buffer — survives the START_STICKY restart loop, so an awgTurnOn
-        // SIGSEGV/SIGABRT or Go panic (which never returns to Kotlin) is captured here even when
-        // the main buffer rotated past it.
-        val crash = try {
-            execLogcat(arrayOf("logcat", "-b", "crash", "-d", "-v", "time", "-t", "300"))
-        } catch (e: Exception) {
-            listOf("crash buffer read failed: ${e.message}")
-        }
         buildList {
-            add("=== LimmDiag/AWG (deep) ===")
+            add("=== LimmDiag (deep) ===")
             addAll(diag)
-            add("=== crash buffer ===")
-            addAll(crash)
             add("=== full tail ===")
             addAll(full)
         }

@@ -25,11 +25,4 @@ interface ServiceControl {
      * @return True if the socket is protected, false otherwise.
      */
     fun vpnProtect(socket: Int): Boolean
-
-    /**
-     * Returns the raw int fd of the established TUN ParcelFileDescriptor, or -1 if not in VPN mode.
-     * Used by the AmneziaWG failover path (MSG_STATE_SWITCH_AWG) to hand the existing TUN fd to
-     * the AWG userspace tunnel without opening a second VpnService.
-     */
-    fun getTunFd(): Int = -1
 }
