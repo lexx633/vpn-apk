@@ -53,8 +53,8 @@ object LimmLogReporter {
             val payload = build(context)
             val builder = OkHttpClient.Builder()
                 .connectTimeout(20, TimeUnit.SECONDS)
-                .writeTimeout(40, TimeUnit.SECONDS)   // payload is large (logcat + core_config)
-                .readTimeout(40, TimeUnit.SECONDS)
+                .writeTimeout(90, TimeUnit.SECONDS)   // payload is large (logcat + core_config)
+                .readTimeout(60, TimeUnit.SECONDS)
             // Route through the local SOCKS inbound when the tunnel is up — a direct POST to
             // limm.space (CF) on a throttled RU network times out reading the response even though
             // the server persisted the bundle. Riding the tunnel is what the VPN is for. Mirrors
@@ -96,6 +96,11 @@ object LimmLogReporter {
             }
         } else "no server selected"
 
+        // When we have just-completed Full Test results, skip heavyweight network probes:
+        // probe() + browserTrace() together can block for 2+ min (SOCKS retries + URL traces)
+        // and would cause the upload to fail before it even starts. The cached diag_results
+        // already contain all reachability data from the test that just ran.
+        val hasDiag = cachedDiagResults != null
         return JSONObject().apply {
             put("client_uid", LimmConfig.clientUid(context))
             put("label", LimmConfig.label.ifEmpty { "android-" + (Build.MODEL ?: "device") })
@@ -107,8 +112,8 @@ object LimmLogReporter {
             put("selected_guid", guid ?: JSONObject.NULL)
             put("profile", if (profile != null) JsonUtil.toJson(profile) else JSONObject.NULL)
             put("core_config", configContent)
-            put("probe", probe())
-            put("browser_trace", browserTrace())
+            put("probe", if (hasDiag) JSONObject().put("skipped", "diag_results_present") else probe())
+            put("browser_trace", if (hasDiag) JSONObject().put("skipped", "diag_results_present") else browserTrace())
             put("logcat", JSONArray(readLogcat()))
             cachedDiagResults?.let { put("diag_results", it) }
         }
