@@ -48,6 +48,9 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 val l3ok = payload.optInt("l3_tunnel", -1) == 1
                 val vpnRunning = payload.optInt("vpn_running", 0) == 1
                 LimmFailover.evaluate(applicationContext, l3ok, vpnRunning)
+                // Keep the subscription pinned to a reachable mirror host (www → vpn → limm) so
+                // v2rayNG's auto-update doesn't stall when one path is ISP-blocked.
+                LimmSubFallback.pinWorkingHost(applicationContext)
                 Result.success()
             } catch (e: Exception) {
                 Result.retry()

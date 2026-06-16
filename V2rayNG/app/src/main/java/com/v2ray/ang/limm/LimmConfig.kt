@@ -48,6 +48,26 @@ object LimmConfig {
         if (host !in mirrorHosts) return listOf(url)
         return updateBases.map { base -> if (path.isEmpty()) base else "$base/$path" }
     }
+
+    /**
+     * True if a /vpn/sub response body is a real subscription, not a provider block-page
+     * served with HTTP 200. Accepts base64 (normal form) or an already-decoded body.
+     * Rejecting a bad body matters: importing it could replace working servers with junk.
+     */
+    fun isValidSub(body: String): Boolean {
+        val t = body.trim()
+        if (t.length < 8) return false
+        val low = t.lowercase()
+        if (low.contains("<html") || low.contains("<!doctype") || low.contains("<body")) return false
+        fun hasScheme(s: String) = s.contains("vless://") || s.contains("vmess://") ||
+            s.contains("hysteria2://") || s.contains("hy2://") || s.contains("trojan://")
+        if (hasScheme(t)) return true
+        return try {
+            val clean = t.replace("\n", "").replace("\r", "")
+            val dec = String(android.util.Base64.decode(clean, android.util.Base64.DEFAULT))
+            hasScheme(dec)
+        } catch (e: Exception) { false }
+    }
     /** Resolved via LimmRemoteConfig (MMKV cache → BuildConfig fallback). */
     val serverIp: String get() = LimmRemoteConfig.serverIp
     val serverName: String get() = LimmRemoteConfig.serverName

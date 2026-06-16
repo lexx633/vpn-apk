@@ -26,7 +26,7 @@ object LimmBootstrap {
     private const val KEY_SUB_IMPORTED = "sub_imported_v2"
 
     // Stable guid for the limm subscription entry in v2rayNG's subscription storage.
-    private const val SUB_GUID = "limm00000000000000000000000000001"
+    const val SUB_GUID = "limm00000000000000000000000000001"
 
     private val mmkv: MMKV by lazy { MMKV.mmkvWithID(MMKV_ID, MMKV.MULTI_PROCESS_MODE) }
     private val imported = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -38,9 +38,11 @@ object LimmBootstrap {
             if (!imported.compareAndSet(false, true)) return
 
             // Register / refresh the limm subscription and enable periodic auto-update.
+            // Default to the direct origin (www); the worker thread re-pins to the first
+            // reachable mirror before importing.
             val sub = SubscriptionItem(
                 remarks = "limm",
-                url = "${LimmConfig.collectorUrl}/vpn/sub",
+                url = "${LimmConfig.updateBases.first()}/vpn/sub",
                 enabled = true,
                 autoUpdate = true,
                 updateInterval = 720, // 12h
@@ -53,6 +55,10 @@ object LimmBootstrap {
             // First import does network I/O — keep it off the main thread.
             Thread {
                 try {
+                    // Pre-flight: pick the first mirror host that serves a valid sub (www → vpn → limm).
+                    val base = LimmSubFallback.resolveWorkingBase() ?: LimmConfig.updateBases.first()
+                    sub.url = "$base/vpn/sub"
+                    MmkvManager.encodeSubscription(SUB_GUID, sub)
                     val res = AngConfigManager.updateConfigViaSub(SubscriptionCache(SUB_GUID, sub))
                     if (res.configCount > 0) {
                         mmkv.encode(KEY_SUB_IMPORTED, true)
