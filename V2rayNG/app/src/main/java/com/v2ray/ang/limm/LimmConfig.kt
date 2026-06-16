@@ -21,6 +21,28 @@ object LimmConfig {
 
     val collectorUrl: String get() = BuildConfig.LIMM_COLLECTOR_URL.trimEnd('/')
     val token: String get() = BuildConfig.LIMM_TOKEN
+
+    /**
+     * Update/download mirrors in priority order: direct origin (www, grey-cloud → RU1 IP)
+     * first, then Cloudflare. An ISP may block one path while the other stays reachable,
+     * so version-check and APK download try both. www.limm.space bypasses CF entirely;
+     * limm.space rides CF. Both serve identical /vpn/* and /api/* on RU1.
+     */
+    val updateBases: List<String> get() = listOf("https://www.limm.space", "https://limm.space")
+
+    /**
+     * Mirrors an absolute limm.space / www.limm.space URL across both hosts in priority
+     * order (direct www first). Non-limm URLs (or unparseable) are returned unchanged.
+     */
+    fun mirrorUrls(url: String): List<String> {
+        val scheme = url.substringBefore("://", "")
+        if (scheme.isEmpty()) return listOf(url)
+        val rest = url.substringAfter("://")
+        val host = rest.substringBefore("/")
+        val path = rest.substringAfter("/", "")
+        if (host != "limm.space" && host != "www.limm.space") return listOf(url)
+        return updateBases.map { base -> if (path.isEmpty()) base else "$base/$path" }
+    }
     /** Resolved via LimmRemoteConfig (MMKV cache → BuildConfig fallback). */
     val serverIp: String get() = LimmRemoteConfig.serverIp
     val serverName: String get() = LimmRemoteConfig.serverName

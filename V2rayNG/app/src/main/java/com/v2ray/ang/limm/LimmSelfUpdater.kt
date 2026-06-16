@@ -73,51 +73,58 @@ object LimmSelfUpdater {
 
         val dest = File(ctx.cacheDir, APK_CACHE_NAME)
         val tmp = File(ctx.cacheDir, "$APK_CACHE_NAME.tmp")
-        return@withContext try {
-            tmp.delete()
-            client.newCall(Request.Builder().url(apkUrl).build()).execute().use { r ->
-                if (!r.isSuccessful) {
-                    Log.e(TAG, "Download failed: HTTP ${r.code}")
-                    return@withContext null
-                }
-                val total = r.body?.contentLength() ?: -1L
-                var downloaded = 0L
-                onProgress(0)
 
-                r.body!!.byteStream().use { input ->
-                    tmp.outputStream().use { output ->
-                        val buf = ByteArray(32_768)
-                        var n: Int
-                        while (input.read(buf).also { n = it } != -1) {
-                            output.write(buf, 0, n)
-                            downloaded += n
-                            if (downloaded > MAX_APK_BYTES) throw java.io.IOException("APK exceeds size limit")
-                            if (total > 0) onProgress((downloaded * 100L / total).toInt())
+        // Try each mirror (direct www first, then CF) until one fully downloads — a CF block
+        // at the ISP shouldn't stall the update when the direct origin is reachable.
+        val candidates = LimmConfig.mirrorUrls(apkUrl)
+        for ((idx, candidate) in candidates.withIndex()) {
+            val ok = try {
+                tmp.delete()
+                client.newCall(Request.Builder().url(candidate).build()).execute().use { r ->
+                    if (!r.isSuccessful) {
+                        Log.e(TAG, "Download failed: HTTP ${r.code} ($candidate)")
+                        return@use false
+                    }
+                    val total = r.body?.contentLength() ?: -1L
+                    var downloaded = 0L
+                    onProgress(0)
+                    r.body!!.byteStream().use { input ->
+                        tmp.outputStream().use { output ->
+                            val buf = ByteArray(32_768)
+                            var n: Int
+                            while (input.read(buf).also { n = it } != -1) {
+                                output.write(buf, 0, n)
+                                downloaded += n
+                                if (downloaded > MAX_APK_BYTES) throw java.io.IOException("APK exceeds size limit")
+                                if (total > 0) onProgress((downloaded * 100L / total).toInt())
+                            }
                         }
                     }
+                    // H5: verify completeness before promoting to cache location
+                    if (downloaded <= 0L || (total > 0 && downloaded != total)) {
+                        Log.e(TAG, "Incomplete download: $downloaded / $total bytes ($candidate)")
+                        false
+                    } else true
                 }
-
-                // H5: verify completeness before promoting to cache location
-                if (downloaded <= 0L || (total > 0 && downloaded != total)) {
-                    Log.e(TAG, "Incomplete download: $downloaded / $total bytes")
+            } catch (e: Exception) {
+                Log.e(TAG, "Download error on $candidate: ${e.message}")
+                false
+            }
+            if (ok) {
+                dest.delete()
+                if (!tmp.renameTo(dest)) {
+                    Log.e(TAG, "Failed to rename tmp to dest")
                     tmp.delete()
                     return@withContext null
                 }
+                onProgress(100)
+                Log.i(TAG, "APK ready: ${dest.length()} bytes (via $candidate)")
+                return@withContext dest
             }
-            dest.delete()
-            if (!tmp.renameTo(dest)) {
-                Log.e(TAG, "Failed to rename tmp to dest")
-                tmp.delete()
-                return@withContext null
-            }
-            onProgress(100)
-            Log.i(TAG, "APK ready: ${dest.length()} bytes")
-            dest
-        } catch (e: Exception) {
-            tmp.delete()
-            Log.e(TAG, "Download error: ${e.message}")
-            null
+            if (idx < candidates.size - 1) Log.i(TAG, "Retrying download on next mirror…")
         }
+        tmp.delete()
+        return@withContext null
     }
 
     // ── Install ──────────────────────────────────────────────────────────────

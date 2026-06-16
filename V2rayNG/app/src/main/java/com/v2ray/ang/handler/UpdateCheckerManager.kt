@@ -6,7 +6,6 @@ import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.dto.CheckUpdateResult
 import com.v2ray.ang.dto.GitHubRelease
 import com.v2ray.ang.dto.UrlContentRequest
-import com.v2ray.ang.extension.concatUrl
 import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
@@ -15,34 +14,32 @@ import kotlinx.coroutines.withContext
 
 object UpdateCheckerManager {
     suspend fun checkForUpdate(includePreRelease: Boolean = false): CheckUpdateResult = withContext(Dispatchers.IO) {
-        val url = if (includePreRelease) {
-            AppConfig.APP_API_URL
-        } else {
-            AppConfig.APP_API_URL.concatUrl("latest")
-        }
+        // Mirror the version-check across direct www origin (grey-cloud) and Cloudflare — an
+        // ISP may block one path while the other works. www first, then CF.
+        val suffix = if (includePreRelease) "/vpn/apk" else "/vpn/apk/latest"
+        val urls = com.v2ray.ang.limm.LimmConfig.updateBases.map { it + suffix }
 
         val proxyUsername = SettingsManager.getSocksUsername()
         val proxyPassword = SettingsManager.getSocksPassword()
+        val httpPort = SettingsManager.getHttpPort()
 
-        var response = HttpUtil.getUrlContent(
-            UrlContentRequest(
-                url = url,
-                timeout = 5000
-            )
-        )
-        if (response.isNullOrEmpty()) {
-            val httpPort = SettingsManager.getHttpPort()
-            response = HttpUtil.getUrlContent(
-                UrlContentRequest(
-                    url = url,
-                    timeout = 5000,
-                    httpPort = httpPort,
-                    proxyUsername = proxyUsername,
-                    proxyPassword = proxyPassword
+        var response: String? = null
+        for (url in urls) {
+            response = HttpUtil.getUrlContent(UrlContentRequest(url = url, timeout = 5000))
+            if (response.isNullOrEmpty()) {
+                response = HttpUtil.getUrlContent(
+                    UrlContentRequest(
+                        url = url,
+                        timeout = 5000,
+                        httpPort = httpPort,
+                        proxyUsername = proxyUsername,
+                        proxyPassword = proxyPassword
+                    )
                 )
-            )
-                ?: throw IllegalStateException("Failed to get response")
+            }
+            if (!response.isNullOrEmpty()) break
         }
+        if (response.isNullOrEmpty()) throw IllegalStateException("Failed to get response")
 
         val latestRelease = if (includePreRelease) {
             JsonUtil.fromJsonSafe(response, Array<GitHubRelease>::class.java)

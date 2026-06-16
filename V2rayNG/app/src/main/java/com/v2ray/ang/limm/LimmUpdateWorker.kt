@@ -73,15 +73,23 @@ class LimmUpdateWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
             }
             val client = builder.build()
 
-            val resp = client.newCall(
-                Request.Builder().url("${LimmConfig.collectorUrl}/vpn/apk/latest")
-                    .header("Cache-Control", "no-cache").build()
-            ).execute().use { r ->
-                if (!r.isSuccessful) return
-                r.body?.string() ?: return
+            // Try the version JSON on each mirror (direct www first, then CF) — one path may
+            // be ISP-blocked while the other works.
+            var resp: String? = null
+            for (base in LimmConfig.updateBases) {
+                try {
+                    client.newCall(
+                        Request.Builder().url("$base/vpn/apk/latest")
+                            .header("Cache-Control", "no-cache").build()
+                    ).execute().use { r ->
+                        if (r.isSuccessful) resp = r.body?.string()
+                    }
+                } catch (e: Exception) { /* try next mirror */ }
+                if (!resp.isNullOrEmpty()) break
             }
+            if (resp.isNullOrEmpty()) return
 
-            val json = JSONObject(resp)
+            val json = JSONObject(resp!!)
             val tagName = json.optString("tag_name", "").removePrefix("v")
             if (tagName.isEmpty()) return
 
@@ -97,31 +105,33 @@ class LimmUpdateWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
                 if (remoteTag.isEmpty() || remoteTag.equals(LimmConfig.buildTag, ignoreCase = true)) return
             }
 
-            // H5: download to .tmp, verify full length against Content-Length, then atomic rename
+            // H5: download to .tmp, verify full length against Content-Length, then atomic rename.
+            // Try each mirror (direct www first, then CF) until one fully downloads.
             val apkFile = File(ctx.cacheDir, LimmSelfUpdater.APK_CACHE_NAME)
             val tmpFile = File(ctx.cacheDir, "${LimmSelfUpdater.APK_CACHE_NAME}.tmp")
-            tmpFile.delete()
             var downloadOk = false
-            client.newCall(Request.Builder().url(apkUrl).build()).execute().use { r ->
-                if (!r.isSuccessful) return
-                val body = r.body ?: return
-                val expected = body.contentLength()
-                var written = 0L
-                body.byteStream().use { input ->
-                    tmpFile.outputStream().use { output ->
-                        val buf = ByteArray(32_768)
-                        var n: Int
-                        while (input.read(buf).also { n = it } != -1) {
-                            output.write(buf, 0, n)
-                            written += n
+            for (candidate in LimmConfig.mirrorUrls(apkUrl)) {
+                tmpFile.delete()
+                try {
+                    client.newCall(Request.Builder().url(candidate).build()).execute().use { r ->
+                        if (!r.isSuccessful) return@use
+                        val body = r.body ?: return@use
+                        val expected = body.contentLength()
+                        var written = 0L
+                        body.byteStream().use { input ->
+                            tmpFile.outputStream().use { output ->
+                                val buf = ByteArray(32_768)
+                                var n: Int
+                                while (input.read(buf).also { n = it } != -1) {
+                                    output.write(buf, 0, n)
+                                    written += n
+                                }
+                            }
                         }
+                        if (written > 0L && (expected <= 0 || written == expected)) downloadOk = true
                     }
-                }
-                if (written <= 0L || (expected > 0 && written != expected)) {
-                    tmpFile.delete()
-                    return
-                }
-                downloadOk = true
+                } catch (e: Exception) { /* try next mirror */ }
+                if (downloadOk) break
             }
             if (!downloadOk) { tmpFile.delete(); return }
             apkFile.delete()
