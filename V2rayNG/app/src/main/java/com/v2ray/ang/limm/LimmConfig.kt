@@ -28,11 +28,16 @@ object LimmConfig {
      * so version-check and APK download try both. www.limm.space bypasses CF entirely;
      * limm.space rides CF. Both serve identical /vpn/* and /api/* on RU1.
      */
-    val updateBases: List<String> get() = listOf("https://www.limm.space", "https://limm.space")
+    val updateBases: List<String> get() =
+        listOf("https://www.limm.space", "https://vpn.limm.space", "https://limm.space")
+
+    /** Hosts recognised as the limm download site (same RU1 origin, different SNI/cloud paths). */
+    private val mirrorHosts = setOf("limm.space", "www.limm.space", "vpn.limm.space")
 
     /**
-     * Mirrors an absolute limm.space / www.limm.space URL across both hosts in priority
-     * order (direct www first). Non-limm URLs (or unparseable) are returned unchanged.
+     * Mirrors an absolute limm.space / www.limm.space / vpn.limm.space URL across all hosts
+     * in priority order (direct www first, then vpn+CF, then bare limm+CF). Non-limm URLs
+     * (or unparseable) are returned unchanged.
      */
     fun mirrorUrls(url: String): List<String> {
         val scheme = url.substringBefore("://", "")
@@ -40,7 +45,7 @@ object LimmConfig {
         val rest = url.substringAfter("://")
         val host = rest.substringBefore("/")
         val path = rest.substringAfter("/", "")
-        if (host != "limm.space" && host != "www.limm.space") return listOf(url)
+        if (host !in mirrorHosts) return listOf(url)
         return updateBases.map { base -> if (path.isEmpty()) base else "$base/$path" }
     }
     /** Resolved via LimmRemoteConfig (MMKV cache → BuildConfig fallback). */
