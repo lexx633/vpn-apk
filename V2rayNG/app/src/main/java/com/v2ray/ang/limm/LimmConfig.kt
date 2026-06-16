@@ -26,7 +26,7 @@ object LimmConfig {
      * Update/download mirrors in priority order: direct origin (www, grey-cloud → RU1 IP)
      * first, then Cloudflare. An ISP may block one path while the other stays reachable,
      * so version-check and APK download try both. www.limm.space bypasses CF entirely;
-     * limm.space rides CF. Both serve identical /vpn/* and /api/* on RU1.
+     * limm.space rides CF. All hosts serve the identical vpn and api paths on RU1.
      */
     val updateBases: List<String> get() =
         listOf("https://www.limm.space", "https://vpn.limm.space", "https://limm.space")
