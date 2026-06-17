@@ -11,6 +11,8 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.v2ray.ang.AppConfig
+import com.v2ray.ang.handler.MmkvManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -36,6 +38,9 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
 
     override suspend fun doWork(): Result {
         if (!LimmConfig.isConfigured() || LimmConfig.token.isEmpty()) return Result.success()
+        // Respect the user's "send check-ins" toggle (default off). Any already-enqueued
+        // periodic work becomes a no-op when disabled.
+        if (!checkinEnabled()) return Result.success()
         // M4: the ladder does blocking OkHttp/Socket/Thread.sleep work; keep it off the
         // default CoroutineWorker dispatcher to avoid starving the shared pool.
         return withContext(Dispatchers.IO) {
@@ -63,9 +68,20 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
     companion object {
         private const val UNIQUE = "limm_checkin"
 
+        /** Whether the user enabled periodic check-ins (default off). */
+        fun checkinEnabled(): Boolean =
+            MmkvManager.decodeSettingsBool(AppConfig.PREF_LIMM_SEND_CHECKIN, false)
+
         /** Schedules the periodic check-in (min interval enforced by Android is 15 min). */
         fun schedule(ctx: Context) {
             if (!LimmConfig.isConfigured()) return
+            // The update checker is independent of the check-in toggle — always keep it running.
+            LimmUpdateWorker.schedule(ctx)
+            // Periodic check-ins are gated by the user's "send check-ins" toggle.
+            if (!checkinEnabled()) {
+                cancel(ctx)
+                return
+            }
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
                 .build()
@@ -79,8 +95,16 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             val now = OneTimeWorkRequestBuilder<LimmCheckinWorker>().build()
             WorkManager.getInstance(ctx)
                 .enqueueUniqueWork("${UNIQUE}_now", ExistingWorkPolicy.REPLACE, now)
-            // Schedule update checker (every 6h — downloads APK and notifies if newer version)
-            LimmUpdateWorker.schedule(ctx)
+        }
+
+        /** Cancels the periodic check-in (does not touch the update checker). */
+        fun cancel(ctx: Context) {
+            WorkManager.getInstance(ctx).cancelUniqueWork(UNIQUE)
+        }
+
+        /** Re-applies the check-in toggle at runtime (e.g. after Settings change). */
+        fun reconcile(ctx: Context) {
+            if (checkinEnabled()) schedule(ctx) else cancel(ctx)
         }
 
         /**

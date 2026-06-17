@@ -281,9 +281,19 @@
             android:summary="Подключаться к VPN автоматически при запуске приложения"
             android:title="Автоподключение при запуске" />
         <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="pref_limm_show_fulltest"
+            android:summary="Показывать пункт «Полный диагностический тест» в меню"
+            android:title="Полный тест в меню" />
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="pref_limm_send_checkin"
+            android:summary="Автоматически отправлять чек-ины на сервер каждые 15 минут"
+            android:title="Отправлять чек-ины (15 мин)" />
+        <CheckBoxPreference
             android:defaultValue="false"
             android:key="pref_limm_debug"
-            android:summary="Показывает пункты диагностики в меню и отправляет чек-ины каждые 15 мин"
+            android:summary="Показывает пункты «Отправить чек-ин» и «Отправить лог» в меню"
             android:title="Режим отладки (debug)" />
     </PreferenceCategory>
 

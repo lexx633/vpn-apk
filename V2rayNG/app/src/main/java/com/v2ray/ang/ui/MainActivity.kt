@@ -132,7 +132,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             // connected state from the app instead of stale pre-connect data.
             if (isRunning == true && !limmCheckinFired) {
                 limmCheckinFired = true
-                if (MmkvManager.decodeSettingsBool(AppConfig.PREF_LIMM_DEBUG, false)) {
+                if (MmkvManager.decodeSettingsBool(AppConfig.PREF_LIMM_SEND_CHECKIN, false)) {
                     lifecycleScope.launch(Dispatchers.IO) {
                         delay(12000)
                         runCatching { com.v2ray.ang.limm.LimmCheckinWorker.sendNow(applicationContext) }
@@ -235,8 +235,10 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
     override fun onResume() {
         super.onResume()
-        // Refresh menu visibility when returning from Settings (debug toggle may have changed)
+        // Refresh menu visibility when returning from Settings (toggles may have changed)
         invalidateOptionsMenu()
+        // Apply check-in toggle changes without requiring an app restart.
+        com.v2ray.ang.limm.LimmCheckinWorker.reconcile(applicationContext)
     }
 
     override fun onPause() {
@@ -246,9 +248,10 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.menu_main, menu)
 
-        // Show limm debug items only when debug mode is enabled in settings
+        // Full Test has its own toggle (default on); check-in/log buttons follow debug mode.
         val debugMode = MmkvManager.decodeSettingsBool(AppConfig.PREF_LIMM_DEBUG, false)
-        menu.findItem(R.id.run_limm_diag)?.isVisible = debugMode
+        val showFullTest = MmkvManager.decodeSettingsBool(AppConfig.PREF_LIMM_SHOW_FULLTEST, true)
+        menu.findItem(R.id.run_limm_diag)?.isVisible = showFullTest
         menu.findItem(R.id.send_checkin_to_limm)?.isVisible = debugMode
         menu.findItem(R.id.send_log_to_limm)?.isVisible = debugMode
 

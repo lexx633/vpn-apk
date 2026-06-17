@@ -81,6 +81,8 @@ object AppConfig {
     const val PREF_REAL_PING_CONCURRENCY = "pref_real_ping_concurrency"
     const val PREF_AUTO_CONNECT_ON_START = "pref_auto_connect_on_start"
     const val PREF_LIMM_DEBUG = "pref_limm_debug"
+    const val PREF_LIMM_SHOW_FULLTEST = "pref_limm_show_fulltest"
+    const val PREF_LIMM_SEND_CHECKIN = "pref_limm_send_checkin"
 
     /** Cache keys. */
     const val CACHE_SUBSCRIPTION_ID = "cache_subscription_id"
