@@ -42,6 +42,9 @@ class CoreVpnService : VpnService(), ServiceControl {
     private var isRunning = false
     private var tun2SocksService: Tun2SocksControl? = null
 
+    // Приложения, которые всегда идут мимо туннеля (детектят VPN и блокируются). См. applyForceBypass.
+    private val LIMM_FORCE_BYPASS = setOf("ru.oneme.app") // МАКС (max.ru)
+
     /**destroy
      * Unfortunately registerDefaultNetworkCallback is going to return our VPN interface: https://android.googlesource.com/platform/frameworks/base/+/dda156ab0c5d66ad82bdcf76cda07cbc0a9c8a2e
      *
@@ -393,6 +396,7 @@ class CoreVpnService : VpnService(), ServiceControl {
         // If per-app proxy is not enabled, disallow the VPN service's own package and return
         if (MmkvManager.decodeSettingsBool(AppConfig.PREF_PER_APP_PROXY) == false) {
             builder.addDisallowedApplication(selfPackageName)
+            applyForceBypass(builder)
             return
         }
 
@@ -400,12 +404,16 @@ class CoreVpnService : VpnService(), ServiceControl {
         val apps = MmkvManager.decodeSettingsStringSet(AppConfig.PREF_PER_APP_PROXY_SET)
         if (apps.isNullOrEmpty()) {
             builder.addDisallowedApplication(selfPackageName)
+            applyForceBypass(builder)
             return
         }
 
         val bypassApps = MmkvManager.decodeSettingsBool(AppConfig.PREF_BYPASS_APPS)
         // Handle the VPN service's own package according to the mode
         if (bypassApps) apps.add(selfPackageName) else apps.remove(selfPackageName)
+        // Force-bypass packages must always go direct (never tunneled), regardless of mode.
+        // In bypass mode → add to disallow set; in proxy mode → remove from allow set.
+        if (bypassApps) apps.addAll(LIMM_FORCE_BYPASS) else apps.removeAll(LIMM_FORCE_BYPASS)
 
         apps.forEach {
             try {
@@ -418,6 +426,19 @@ class CoreVpnService : VpnService(), ServiceControl {
                 }
             } catch (e: PackageManager.NameNotFoundException) {
                 LogUtil.e(AppConfig.TAG, "StartCore-VPN: Failed to configure app", e)
+            }
+        }
+    }
+
+    // МАКС (ru.oneme.app) детектит активный VPN и блокирует работу. Принудительно уводим его
+    // трафик мимо туннеля — для исключённого приложения система отдаёт физическую сеть без
+    // флага TRANSPORT_VPN, поэтому проверка «включён ли VPN» в таких приложениях не срабатывает.
+    private fun applyForceBypass(builder: Builder) {
+        LIMM_FORCE_BYPASS.forEach {
+            try {
+                builder.addDisallowedApplication(it)
+            } catch (e: PackageManager.NameNotFoundException) {
+                // приложение не установлено — пропускаем
             }
         }
     }
