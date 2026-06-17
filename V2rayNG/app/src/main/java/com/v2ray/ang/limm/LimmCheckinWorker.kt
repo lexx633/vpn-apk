@@ -2,9 +2,11 @@ package com.v2ray.ang.limm
 
 import android.content.Context
 import android.os.Build
+import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
@@ -64,7 +66,12 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
         /** Schedules the periodic check-in (min interval enforced by Android is 15 min). */
         fun schedule(ctx: Context) {
             if (!LimmConfig.isConfigured()) return
-            val req = PeriodicWorkRequestBuilder<LimmCheckinWorker>(15, TimeUnit.MINUTES).build()
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+            val req = PeriodicWorkRequestBuilder<LimmCheckinWorker>(15, TimeUnit.MINUTES)
+                .setConstraints(constraints)
+                .build()
             WorkManager.getInstance(ctx)
                 .enqueueUniquePeriodicWork(UNIQUE, ExistingPeriodicWorkPolicy.KEEP, req)
             // Immediate one-shot so a fresh reading lands right after launch/connect
@@ -109,28 +116,8 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             false
         }
 
-        /** TCP connect via SOCKS5 proxy to measure pure tunnel RTT. No DNS, no TLS — just TCP handshake. */
-        private fun tcpLatencyViaSocks(host: String, port: Int, proxyPort: Int, timeoutMs: Int = 5000): Long? = try {
-            val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", proxyPort))
-            val t0 = System.currentTimeMillis()
-            Socket(proxy).use { s -> s.connect(InetSocketAddress(host, port), timeoutMs) }
-            System.currentTimeMillis() - t0
-        } catch (e: Exception) { null }
-
-        private fun httpGet(url: String, timeoutSec: Long = 8): Pair<Boolean, String> = try {
-            val c = OkHttpClient.Builder()
-                .connectTimeout(timeoutSec, TimeUnit.SECONDS)
-                .readTimeout(timeoutSec, TimeUnit.SECONDS)
-                .build()
-            c.newCall(Request.Builder().url(url).build()).execute().use { r ->
-                (r.isSuccessful) to (r.body?.string()?.trim() ?: "")
-            }
-        } catch (e: Exception) {
-            false to ""
-        }
-
         /**
-         * Same as httpGet but routed through the local SOCKS proxy so it traverses the tunnel.
+         * GET routed through the local SOCKS proxy so it traverses the tunnel.
          * Retries a couple of times with a generous timeout: right after connect the tunnel +
          * tunneled-DNS are still warming up, so a single short attempt would falsely report a
          * handshake failure. We give it up to 3 tries before declaring L2/L3 down.
@@ -197,7 +184,11 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 c.newCall(Request.Builder().url(url).header("User-Agent", "Mozilla/5.0 (limm-probe)").build())
                     .execute().use { r ->
                         val code = r.code
-                        val body = (try { r.body?.string() ?: "" } catch (e: Exception) { "" }).lowercase()
+                        // Only marker-based probes (chgpt) need the body; for marker-less probes
+                        // (tg/ggl) the HTTP code alone decides, so skip the multi-KB download.
+                        // Cap at 16 KB — geo-block markers appear near the top of the response.
+                        val body = if (markers.isEmpty()) "" else
+                            (try { r.peekBody(16L * 1024).string() } catch (e: Exception) { "" }).lowercase()
                         if (code == 451 || markers.any { body.contains(it) }) "blocked" else "ok"
                     }
             } catch (e: Exception) {
@@ -269,7 +260,9 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 // so we can tell "tunnel up but no traffic" apart from "no tunnel". Mirrors a page load.
                 val (g204, _) = httpGetViaSocks("https://www.google.com/generate_204", socksPort)
                 l4 = if (g204) 1 else 0
-                val (site, _) = httpGetViaSocks("https://www.gstatic.com/generate_204", socksPort)
+                // browserOk reuses the gstatic/generate_204 result already gathered for tunnel_ms
+                // above (3 attempts) instead of issuing a 4th redundant fetch.
+                val site = tmsSamples.isNotEmpty()
                 browserOk = if (g204 || site) 1 else 0
                 browserHost = if (g204) "google" else if (site) "gstatic" else "none"
                 // Сервисы через туннель (в raw, без новых колонок в БД): TG / Google / ChatGPT
