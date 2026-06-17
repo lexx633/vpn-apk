@@ -24,22 +24,23 @@ import java.net.Socket
 import java.util.concurrent.TimeUnit
 
 /**
- * Per-profile connectivity test.
+ * Per-profile connectivity test (Full Test).
  *
  * Sequence:
- *  1. Stop VPN if running
- *  2. Baseline check-in (VPN off)
+ *  1. Stop VPN if running, baseline check-in (VPN off)
+ *  2. Warm up VpnService once (F2.3)
  *  3. For each profile:
- *       - switch to profile
- *       - start VPN, wait for SOCKS (up to 10s)
- *       - test egress IP via SOCKS → api.ipify.org (must equal server IP)
- *       - stop VPN
- *  4. Restore original profile
- *  5. Upload applog
+ *       - TCP pre-ping host:port for TCP transports; skip dead ones without starting the core (F3.1)
+ *       - stop the profile left running from the previous iteration (F1.1), then start this one
+ *       - wait for SOCKS, fetch egress IP via SOCKS (own /api/myip, ipify fallback)
+ *       - liveness gate: generate_204 via SOCKS; egress-ok-but-204-fail → degraded (F2.2)
+ *  4. Post a per-profile report to /api/fulltest; pick best (non-degraded, then lowest latency),
+ *     reusing its tunnel if still up (F1.1); post-test check-in + log upload while VPN is on
+ *  5. Restore original profile / VPN state
  *
- * Max time per profile: ~30s (6s SOCKS wait + 3×8s egress retries + overhead).
- * XHTTP may return no data on the first request — up to EGRESS_RETRY_MAX attempts are made.
- * ok=true if any egress IP is returned (tunnel up); egress_ip recorded for multi-server analysis.
+ * ok = any egress IP returned (tunnel carries traffic); profiles may exit through different nodes,
+ * so egress is NOT compared to a single server IP. Per-profile budget: ~4–6s healthy, up to ~25s
+ * on a flaky one. Note: latency_ms = wall-clock (start + egress retries), NOT a clean tunnel RTT.
  */
 object LimmDiagTest {
 
@@ -106,13 +107,32 @@ object LimmDiagTest {
             .connectTimeout(timeoutSec, TimeUnit.SECONDS)
             .readTimeout(timeoutSec, TimeUnit.SECONDS)
             .build()
-        // Single endpoint (no amazonaws fallback): 2 urls × timeout × retries ballooned to ~90s
-        // on a dead profile. One url keeps the per-profile budget tight.
+        // F2.1b: own /api/myip first to drop the sole dependency on ipify. The probe runs THROUGH
+        // the tunnel (exit is outside RU), so the CF path (collectorUrl = limm.space) is always
+        // reachable and returns the exit-node IP via CF-Connecting-IP. We deliberately do NOT use
+        // the www/vpn mirrors here — through the :443 stream-mux they echo 127.0.0.1 (no real-peer
+        // propagation). One myip call + one ipify fallback keeps the per-profile budget tight.
+        try {
+            client.newCall(Request.Builder().url("${LimmConfig.collectorUrl}/api/myip").build())
+                .execute().use { r ->
+                    if (r.isSuccessful) parseMyIp(r.body?.string())?.let { return it }
+                }
+        } catch (e: Exception) { /* fall through to ipify */ }
         try {
             client.newCall(Request.Builder().url("https://api.ipify.org").build())
                 .execute().use { r -> if (r.isSuccessful) return r.body?.string()?.trim() }
         } catch (e: Exception) { /* timeout/fail → null */ }
         return null
+    }
+
+    /** Parse {"ip":"..."} from /api/myip, rejecting blank/loopback (defends against the www/mux
+     *  path that echoes 127.0.0.1 instead of the real egress). */
+    private fun parseMyIp(body: String?): String? {
+        if (body.isNullOrBlank()) return null
+        return try {
+            val ip = JSONObject(body).optString("ip", "").trim()
+            if (ip.isEmpty() || ip.startsWith("127.") || ip == "::1" || ip == "0.0.0.0") null else ip
+        } catch (e: Exception) { null }
     }
 
     /** F3.1: raw TCP reachability of the transport's host:port before spinning up the core —
