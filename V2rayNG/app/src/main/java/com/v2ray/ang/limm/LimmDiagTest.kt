@@ -180,6 +180,9 @@ object LimmDiagTest {
                 val obj = JSONObject().apply {
                     put("name", p.name)
                     put("ok", if (p.ok) 1 else 0)
+                    // §7.7 contract field: raw L4 liveness (generate_204 ok through the tunnel).
+                    // browser_ok = profile up AND 204 passed; degraded (kept for continuity) = ok && !browser_ok.
+                    put("browser_ok", if (p.ok && !p.degraded) 1 else 0)
                     if (p.latencyMs != null) put("latency_ms", p.latencyMs)
                     if (p.egressIp != null) put("egress_ip", p.egressIp)
                     if (p.degraded) put("degraded", 1)
@@ -345,6 +348,7 @@ object LimmDiagTest {
             for (p in profileResults) arr.put(JSONObject().apply {
                 put("name", p.name)
                 put("ok", if (p.ok) 1 else 0)
+                put("browser_ok", if (p.ok && !p.degraded) 1 else 0)
                 p.latencyMs?.let { put("latency_ms", it) }
                 p.egressIp?.let { put("egress_ip", it) }
                 if (p.degraded) put("degraded", 1)
