@@ -161,7 +161,7 @@ object LimmDiagTest {
 
         val wasRunning = CoreServiceManager.isRunning() || vpnTransportUp(ctx)
         if (wasRunning) {
-            onProgress("⏹  Останавливаю VPN…")
+            onProgress("⏹ Останавливаю VPN…")
             withContext(Dispatchers.Main) {
                 if (!isActive) return@withContext
                 CoreServiceManager.stopVService(ctx)
@@ -171,17 +171,16 @@ object LimmDiagTest {
 
         Log.i(TAG, "=== LIMM DIAG TEST START ===")
 
-        onProgress("📡  Чек-ин (VPN выкл)…")
+        onProgress("  Чек-ин (VPN выкл)…")
         val (ok0, msg0) = LimmCheckinWorker.sendNow(ctx)
-        onProgress(if (ok0) "    ✓ $msg0" else "    ✗ $msg0")
+        onProgress(if (ok0) " ✓ $msg0" else " ✗ $msg0")
         Log.i(TAG, "checkin-off: ok=$ok0 $msg0")
 
         val guids = MmkvManager.decodeAllServerList()
         val savedGuid = MmkvManager.getSelectServer()
         val socksPort = try { SettingsManager.getSocksPort() } catch (e: Exception) { 10808 }
-        val serverIp = LimmConfig.serverIp
 
-        onProgress("\n── Профили (${guids.size}) ──\n")
+        onProgress("\n── Профили (${guids.size}) ──")
 
         val profileResults = mutableListOf<ProfileResult>()
 
@@ -192,11 +191,11 @@ object LimmDiagTest {
             // Skip any leftover -awg profiles: AWG was removed, so testing one as plain xray
             // WireGuard would just report a broken tunnel and pollute the verdict.
             if (name.endsWith("-awg", ignoreCase = true)) {
-                onProgress("    ⚪  ▸ $name  (AWG больше не поддерживается)")
+                onProgress("▸ $name (AWG)")
                 continue
             }
 
-            onProgress("⏳  ▸ $name…")
+            onProgress("▸ $name")
             Log.i(TAG, "--- profile: $name ($guid) ---")
 
             withContext(Dispatchers.Main) {
@@ -208,7 +207,7 @@ object LimmDiagTest {
 
             val socksReady = waitForSocks(socksPort)
             if (!socksReady) {
-                onProgress("    ✗  ▸ $name  (SOCKS :$socksPort не поднялся за ${SOCKS_WAIT_MAX_MS / 1000}s)")
+                onProgress("\r▸ $name (SOCKS timeout)")
                 Log.w(TAG, "profile $name: SOCKS timeout")
                 profileResults.add(ProfileResult(name, false, null))
                 withContext(Dispatchers.Main) {
@@ -230,21 +229,18 @@ object LimmDiagTest {
                 egress = withContext(Dispatchers.IO) { egressViaSocks(socksPort, egTimeout) }
                 if (egress != null) break
                 if (attempt < egRetries) {
-                    onProgress("    ↻  попытка ${attempt + 1}/$egRetries…")
                     Log.d(TAG, "profile $name: egress attempt $attempt failed, retrying")
                     delay(EGRESS_RETRY_DELAY_MS)
                 }
             }
             val ms = System.currentTimeMillis() - t0
-            // ok = tunnel carried traffic (any egress returned). We don't compare to serverIp
-            // because profiles may exit through different servers (FR / DE1 / etc.).
             val vpnOk = egress != null
-            val note = when {
-                egress != null -> "$egress  [${ms}ms]${if (egress == serverIp) "  = DE1 ✓" else ""}"
-                else           -> "нет ответа  [${ms}ms, $egRetries попытки]"
+            if (vpnOk) {
+                onProgress("\r▸ $name [${ms}ms] ✓")
+            } else {
+                onProgress("\r▸ $name (нет ответа)")
             }
-            onProgress("    ${if (vpnOk) "✓" else "✗"}  ▸ $name  ($note)")
-            Log.i(TAG, "profile $name: egress=$egress serverIp=$serverIp ok=$vpnOk ms=$ms")
+            Log.i(TAG, "profile $name: egress=$egress ok=$vpnOk ms=$ms")
             profileResults.add(ProfileResult(name, vpnOk, if (vpnOk) ms else null, egress))
 
             withContext(Dispatchers.Main) {
@@ -281,7 +277,7 @@ object LimmDiagTest {
         if (bestIdx >= 0) {
             val bestGuid = guids[bestIdx]
             val bestName = profileResults[bestIdx].name
-            onProgress("\n⏳  Чекин (VPN on · $bestName)…")
+            onProgress("\n⏳ Чекин (VPN on · $bestName)…")
             Log.i(TAG, "post-test checkin: switching to $bestName ($bestGuid)")
             withContext(Dispatchers.Main) {
                 if (!isActive) return@withContext
@@ -291,15 +287,15 @@ object LimmDiagTest {
             val ckReady = waitForSocks(socksPort)
             if (ckReady) {
                 val (ckOk, ckMsg) = withContext(Dispatchers.IO) { LimmCheckinWorker.sendNow(ctx) }
-                onProgress(if (ckOk) "    ✓ $ckMsg" else "    ✗ $ckMsg")
+                onProgress(if (ckOk) " ✓ $ckMsg" else " ✗ $ckMsg")
                 Log.i(TAG, "post-test checkin: ok=$ckOk $ckMsg")
                 // Upload log while VPN is still on — limm.space may not resolve without the tunnel.
-                onProgress("\n📤  Отправляю лог на сервер…")
+                onProgress("\n📤 Отправляю лог на сервер…")
                 val (logOk, logMsg) = withContext(Dispatchers.IO) { LimmLogReporter.send(ctx) }
-                onProgress(if (logOk) "    ✓ Лог отправлен" else "    ✗ $logMsg")
+                onProgress(if (logOk) " ✓ Лог отправлен" else " ✗ $logMsg")
                 logUploaded = true
             } else {
-                onProgress("    ✗ SOCKS не поднялся для чекина")
+                onProgress(" ✗ SOCKS не поднялся для чекина")
             }
             withContext(Dispatchers.Main) {
                 if (!isActive) return@withContext
@@ -320,7 +316,7 @@ object LimmDiagTest {
         // M1: if the VPN was running when the test started, bring it back up — the test
         // only restored the selected profile, leaving the service itself off.
         if (wasRunning) {
-            onProgress("\n▶  Восстанавливаю VPN…")
+            onProgress("\n▶ Восстанавливаю VPN…")
             withContext(Dispatchers.Main) {
                 if (!isActive) return@withContext
                 CoreServiceManager.startVService(ctx)
@@ -331,9 +327,9 @@ object LimmDiagTest {
 
         // Fallback: upload log without VPN (only when no working profile was found).
         if (!logUploaded) {
-            onProgress("\n📤  Отправляю лог на сервер…")
+            onProgress("\n📤 Отправляю лог на сервер…")
             val (logOk, logMsg) = withContext(Dispatchers.IO) { LimmLogReporter.send(ctx) }
-            onProgress(if (logOk) "    ✓ Лог отправлен" else "    ✗ $logMsg")
+            onProgress(if (logOk) " ✓ Лог отправлен" else " ✗ $logMsg")
         }
         } finally {
             isRunning = false

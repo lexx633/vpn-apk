@@ -350,7 +350,15 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
             val sb = StringBuilder()
             fun appendLine(line: String) {
-                sb.appendLine(line)
+                if (line.startsWith('\r')) {
+                    val content = line.drop(1)
+                    val end = if (sb.isNotEmpty() && sb.last() == '\n') sb.length - 1 else sb.length
+                    val lastNl = sb.lastIndexOf('\n', end - 1)
+                    sb.delete(if (lastNl >= 0) lastNl + 1 else 0, sb.length)
+                    sb.appendLine(content)
+                } else {
+                    sb.appendLine(line)
+                }
                 runOnUiThread {
                     tv.text = sb.toString()
                     scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
