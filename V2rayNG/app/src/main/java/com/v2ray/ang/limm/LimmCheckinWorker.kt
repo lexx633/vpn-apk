@@ -116,6 +116,16 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             false
         }
 
+        /** Parse {"ip":"..."} from /api/myip, rejecting blank/loopback (the www/mux path echoes
+         *  127.0.0.1 instead of the real egress — see LimmDiagTest.parseMyIp). */
+        private fun parseMyIp(body: String?): String? {
+            if (body.isNullOrBlank()) return null
+            return try {
+                val ip = JSONObject(body).optString("ip", "").trim()
+                if (ip.isEmpty() || ip.startsWith("127.") || ip == "::1" || ip == "0.0.0.0") null else ip
+            } catch (e: Exception) { null }
+        }
+
         /**
          * GET routed through the local SOCKS proxy so it traverses the tunnel.
          * Retries a couple of times with a generous timeout: right after connect the tunnel +
@@ -240,13 +250,21 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             if (l0 == 1 && l1 == 1 && running) {
 
                 // L2/L3 via the local SOCKS proxy → this traffic goes THROUGH the tunnel.
-                // A successful response = REALITY handshake is up (L2). Egress == server IP = L3.
-                val (ok, body) = httpGetViaSocks("https://api.ipify.org", socksPort)
-                l2 = if (ok) 1 else 0
-                if (ok) {
-                    egress = body
-                    l3 = if (egress != null) 1 else 0
+                // A successful response = REALITY handshake is up (L2); an egress IP = L3.
+                // F2.1b: own /api/myip first (CF path only — through the :443 stream-mux the www/vpn
+                // mirrors echo 127.0.0.1), api.ipify.org as fallback. Drops the sole dependency on
+                // ipify that produced a false handshake_fail whenever ipify was down/blocked.
+                val (myOk, myBody) = httpGetViaSocks("${LimmConfig.collectorUrl}/api/myip", socksPort)
+                var handshake = myOk
+                var eg: String? = if (myOk) parseMyIp(myBody) else null
+                if (eg == null) {
+                    val (ok, body) = httpGetViaSocks("https://api.ipify.org", socksPort)
+                    handshake = handshake || ok
+                    if (ok) eg = body.trim().ifEmpty { null }
                 }
+                l2 = if (handshake) 1 else 0
+                egress = eg
+                l3 = if (eg != null) 1 else if (handshake) 0 else null
                 // tunnel_ms — 3 HTTP roundtrips through VPN tunnel → average
                 val tmsSamples = mutableListOf<Long>()
                 repeat(3) {
