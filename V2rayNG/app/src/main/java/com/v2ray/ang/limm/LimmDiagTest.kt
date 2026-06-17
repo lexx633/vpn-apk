@@ -115,7 +115,42 @@ object LimmDiagTest {
         return null
     }
 
-    private data class ProfileResult(val name: String, val ok: Boolean, val latencyMs: Long?, val egressIp: String? = null)
+    /** F3.1: raw TCP reachability of the transport's host:port before spinning up the core —
+     *  a dead TCP transport can't tunnel, so skip the heavy egress probe. 1 retry. */
+    private fun tcpPrePing(host: String, port: Int, timeoutMs: Int = 1500): Boolean {
+        repeat(2) { attempt ->
+            try {
+                Socket().use { it.connect(InetSocketAddress(host, port), timeoutMs); return true }
+            } catch (e: Exception) {
+                if (attempt == 0) try { Thread.sleep(200) } catch (ie: InterruptedException) {
+                    Thread.currentThread().interrupt(); return false
+                }
+            }
+        }
+        return false
+    }
+
+    /** F2.2: second liveness gate through the tunnel — generate_204 reachability, to tell
+     *  "egress endpoint answered" from "general browsing actually works". */
+    private fun liveness204ViaSocks(socksPort: Int, timeoutSec: Long = 5L): Boolean = try {
+        val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
+        OkHttpClient.Builder()
+            .proxy(proxy)
+            .connectTimeout(timeoutSec, TimeUnit.SECONDS)
+            .readTimeout(timeoutSec, TimeUnit.SECONDS)
+            .build()
+            .newCall(Request.Builder().url("https://www.gstatic.com/generate_204").build())
+            .execute().use { it.isSuccessful || it.code == 204 }
+    } catch (e: Exception) { false }
+
+    private data class ProfileResult(
+        val name: String,
+        val ok: Boolean,
+        val latencyMs: Long?,
+        val egressIp: String? = null,
+        val degraded: Boolean = false,
+        val guid: String = "",
+    )
 
     private fun postFullTest(ctx: Context, profiles: List<ProfileResult>) {
         if (profiles.isEmpty()) return
@@ -127,6 +162,7 @@ object LimmDiagTest {
                     put("ok", if (p.ok) 1 else 0)
                     if (p.latencyMs != null) put("latency_ms", p.latencyMs)
                     if (p.egressIp != null) put("egress_ip", p.egressIp)
+                    if (p.degraded) put("degraded", 1)
                 }
                 arr.put(obj)
             }
@@ -182,7 +218,20 @@ object LimmDiagTest {
 
         onProgress("\n── Профили (${guids.size}) ──")
 
+        // F2.3: warm up VpnService once so the first profile doesn't pay the cold-start penalty.
+        if (savedGuid != null) {
+            onProgress("🔥 Прогрев…")
+            withContext(Dispatchers.Main) { if (!isActive) return@withContext; CoreServiceManager.startVService(ctx) }
+            waitForSocks(socksPort)
+            withContext(Dispatchers.Main) { if (!isActive) return@withContext; CoreServiceManager.stopVService(ctx) }
+            delay(500)
+            withContext(Dispatchers.IO) { waitForSocksClosed(socksPort) }
+        }
+
         val profileResults = mutableListOf<ProfileResult>()
+        // F1.1: profile left running from the previous iteration (stopped at the top of the next
+        // one) so the post-test phase can reuse the best tunnel instead of restarting it.
+        var runningGuid: String? = null
 
         for (guid in guids) {
             val cfg = MmkvManager.decodeServerConfig(guid)
@@ -195,6 +244,30 @@ object LimmDiagTest {
                 continue
             }
 
+            // F3.1: TCP pre-ping for TCP transports — skip the heavy egress probe when host:port
+            // doesn't even answer on TCP (a dead TCP server can't tunnel). UDP (hy2/tuic) excluded
+            // (TCP may be silent on a healthy UDP service); CF-fronted cf-ws connects via the edge
+            // regardless of origin, so pre-ping is a harmless no-op there.
+            val isUdp = name.endsWith("-hy2", true) || name.endsWith("-tc", true)
+            if (!isUdp) {
+                val host = cfg?.server
+                val port = cfg?.serverPort?.toIntOrNull()
+                if (host != null && port != null && !withContext(Dispatchers.IO) { tcpPrePing(host, port) }) {
+                    onProgress("\r▸ $name (TCP $host:$port недоступен)")
+                    Log.w(TAG, "profile $name: TCP pre-ping failed $host:$port")
+                    profileResults.add(ProfileResult(name, false, null, guid = guid))
+                    continue
+                }
+            }
+
+            // F1.1: stop the profile left running from the previous iteration before starting this.
+            if (runningGuid != null) {
+                withContext(Dispatchers.Main) { if (!isActive) return@withContext; CoreServiceManager.stopVService(ctx) }
+                delay(500)
+                withContext(Dispatchers.IO) { waitForSocksClosed(socksPort) }
+                runningGuid = null
+            }
+
             onProgress("▸ $name")
             Log.i(TAG, "--- profile: $name ($guid) ---")
 
@@ -203,18 +276,15 @@ object LimmDiagTest {
                 MmkvManager.setSelectServer(guid)
                 CoreServiceManager.startVService(ctx)
             }
+            runningGuid = guid
             delay(100)
 
             val socksReady = waitForSocks(socksPort)
             if (!socksReady) {
                 onProgress("\r▸ $name (SOCKS timeout)")
                 Log.w(TAG, "profile $name: SOCKS timeout")
-                profileResults.add(ProfileResult(name, false, null))
-                withContext(Dispatchers.Main) {
-                    if (!isActive) return@withContext
-                    CoreServiceManager.stopVService(ctx)
-                }
-                delay(1500)
+                profileResults.add(ProfileResult(name, false, null, guid = guid))
+                // F1.1: leave the stop to the top of the next iteration (runningGuid stays set).
                 continue
             }
 
@@ -235,23 +305,19 @@ object LimmDiagTest {
             }
             val ms = System.currentTimeMillis() - t0
             val vpnOk = egress != null
+            // F2.2: second liveness gate — real reachability through the tunnel (generate_204).
+            // egress OK but 204 fail → degraded (tunnel up, browsing flaky), not a full fail.
+            val live = if (vpnOk) withContext(Dispatchers.IO) { liveness204ViaSocks(socksPort) } else false
+            val degraded = vpnOk && !live
             if (vpnOk) {
-                onProgress("\r▸ $name [${ms}ms] ✓")
+                onProgress("\r▸ $name [${ms}ms] ✓${if (degraded) " ⚠no-204" else ""}")
             } else {
                 onProgress("\r▸ $name (нет ответа)")
             }
-            Log.i(TAG, "profile $name: egress=$egress ok=$vpnOk ms=$ms")
-            profileResults.add(ProfileResult(name, vpnOk, if (vpnOk) ms else null, egress))
+            Log.i(TAG, "profile $name: egress=$egress ok=$vpnOk live204=$live ms=$ms")
+            profileResults.add(ProfileResult(name, vpnOk, if (vpnOk) ms else null, egress, degraded, guid))
 
-            withContext(Dispatchers.Main) {
-                if (!isActive) return@withContext
-                CoreServiceManager.stopVService(ctx)
-            }
-            delay(500)
-            // Wait for old Xray to fully die before starting next profile.
-            // Without this, old Xray's SOCKS inbound may still serve the next profile's
-            // egress check → reports ok=1 through the previous (working) tunnel.
-            withContext(Dispatchers.IO) { waitForSocksClosed(socksPort) }
+            // F1.1: do NOT stop here — leave the tunnel up for the next iteration / post-test reuse.
         }
 
         // Cache results for LimmLogReporter — included in applog (auto + manual "Send log" button)
@@ -261,30 +327,44 @@ object LimmDiagTest {
                 put("ok", if (p.ok) 1 else 0)
                 p.latencyMs?.let { put("latency_ms", it) }
                 p.egressIp?.let { put("egress_ip", it) }
+                if (p.degraded) put("degraded", 1)
             })
         }
 
         // Upload profile test results to /api/fulltest
         withContext(Dispatchers.IO) { postFullTest(ctx, profileResults) }
 
-        // Post-test checkin: switch to best working profile, run full checkin so the
-        // dashboard shows correct Статус / Сервисы / Пинг after Full Test.
+        // Post-test checkin: switch to the best working profile (non-degraded first, then lowest
+        // latency) and run a full checkin so the dashboard shows correct Статус / Сервисы / Пинг.
         val bestResult = profileResults
             .filter { it.ok }
-            .minByOrNull { it.latencyMs ?: Long.MAX_VALUE }
-        val bestIdx = if (bestResult != null) profileResults.indexOf(bestResult) else -1
+            .sortedWith(compareBy({ it.degraded }, { it.latencyMs ?: Long.MAX_VALUE }))
+            .firstOrNull()
         var logUploaded = false
-        if (bestIdx >= 0) {
-            val bestGuid = guids[bestIdx]
-            val bestName = profileResults[bestIdx].name
+        if (bestResult != null) {
+            val bestGuid = bestResult.guid
+            val bestName = bestResult.name
             onProgress("\n⏳ Чекин (VPN on · $bestName)…")
-            Log.i(TAG, "post-test checkin: switching to $bestName ($bestGuid)")
-            withContext(Dispatchers.Main) {
-                if (!isActive) return@withContext
-                MmkvManager.setSelectServer(bestGuid)
-                CoreServiceManager.startVService(ctx)
+            Log.i(TAG, "post-test checkin: best=$bestName ($bestGuid)")
+            // F1.1: reuse the tunnel if best is the one still running from the loop.
+            val reuse = runningGuid == bestGuid && withContext(Dispatchers.IO) { socksAccepting(socksPort) }
+            if (reuse) {
+                onProgress(" ↺ туннель уже поднят")
+            } else {
+                if (runningGuid != null) {
+                    withContext(Dispatchers.Main) { if (!isActive) return@withContext; CoreServiceManager.stopVService(ctx) }
+                    delay(500)
+                    withContext(Dispatchers.IO) { waitForSocksClosed(socksPort) }
+                    runningGuid = null
+                }
+                withContext(Dispatchers.Main) {
+                    if (!isActive) return@withContext
+                    MmkvManager.setSelectServer(bestGuid)
+                    CoreServiceManager.startVService(ctx)
+                }
+                runningGuid = bestGuid
             }
-            val ckReady = waitForSocks(socksPort)
+            val ckReady = reuse || waitForSocks(socksPort)
             if (ckReady) {
                 val (ckOk, ckMsg) = withContext(Dispatchers.IO) { LimmCheckinWorker.sendNow(ctx) }
                 onProgress(if (ckOk) " ✓ $ckMsg" else " ✗ $ckMsg")
@@ -303,6 +383,13 @@ object LimmDiagTest {
             }
             delay(500)
             withContext(Dispatchers.IO) { waitForSocksClosed(socksPort) }
+            runningGuid = null
+        } else if (runningGuid != null) {
+            // No working profile, but a tunnel may still be up from the loop — stop it.
+            withContext(Dispatchers.Main) { if (!isActive) return@withContext; CoreServiceManager.stopVService(ctx) }
+            delay(500)
+            withContext(Dispatchers.IO) { waitForSocksClosed(socksPort) }
+            runningGuid = null
         }
 
         // Restore original profile
