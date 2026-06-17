@@ -160,6 +160,7 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
             val c = OkHttpClient.Builder()
                 .proxy(proxy)
+                .dns(LimmDns.IPV4_ONLY)
                 .connectTimeout(timeoutSec, TimeUnit.SECONDS)
                 .readTimeout(timeoutSec, TimeUnit.SECONDS)
                 .build()
@@ -210,6 +211,7 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
             val c = OkHttpClient.Builder()
                 .proxy(proxy)
+                .dns(LimmDns.IPV4_ONLY)
                 .connectTimeout(timeoutSec, TimeUnit.SECONDS)
                 .readTimeout(timeoutSec, TimeUnit.SECONDS)
                 .followRedirects(true)
@@ -352,6 +354,7 @@ class LimmCheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
 
         private fun post(payload: JSONObject) {
             val c = OkHttpClient.Builder()
+                .dns(LimmDns.IPV4_ONLY)
                 .connectTimeout(12, TimeUnit.SECONDS)
                 .readTimeout(12, TimeUnit.SECONDS)
                 .build()

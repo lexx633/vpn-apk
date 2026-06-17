@@ -52,6 +52,7 @@ object LimmLogReporter {
         return try {
             val payload = build(context)
             val builder = OkHttpClient.Builder()
+                .dns(LimmDns.IPV4_ONLY)
                 .connectTimeout(20, TimeUnit.SECONDS)
                 .writeTimeout(90, TimeUnit.SECONDS)   // payload is large (logcat + core_config)
                 .readTimeout(60, TimeUnit.SECONDS)
@@ -211,6 +212,7 @@ object LimmLogReporter {
         val t0 = System.currentTimeMillis()
         return try {
             val c = OkHttpClient.Builder()
+                .dns(LimmDns.IPV4_ONLY)
                 .connectTimeout(8, TimeUnit.SECONDS)
                 .readTimeout(8, TimeUnit.SECONDS)
                 .callTimeout(12, TimeUnit.SECONDS)
@@ -273,6 +275,7 @@ object LimmLogReporter {
 
     private fun httpGet(url: String, timeoutSec: Long = 8): Pair<Boolean, String> {
         val c = OkHttpClient.Builder()
+            .dns(LimmDns.IPV4_ONLY)
             .connectTimeout(timeoutSec, TimeUnit.SECONDS)
             .readTimeout(timeoutSec, TimeUnit.SECONDS)
             .build()
@@ -294,6 +297,7 @@ object LimmLogReporter {
         val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", socksPort))
         val c = OkHttpClient.Builder()
             .proxy(proxy)
+            .dns(LimmDns.IPV4_ONLY)
             .connectTimeout(timeoutSec, TimeUnit.SECONDS)
             .readTimeout(timeoutSec, TimeUnit.SECONDS)
             .build()
