@@ -2,7 +2,9 @@ package com.v2ray.ang.handler
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.Build
 import android.text.TextUtils
+import com.v2ray.ang.AngApplication
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.R
 import com.v2ray.ang.core.CoreConfigManager
@@ -21,6 +23,7 @@ import com.v2ray.ang.fmt.TrojanFmt
 import com.v2ray.ang.fmt.VlessFmt
 import com.v2ray.ang.fmt.VmessFmt
 import com.v2ray.ang.fmt.WireguardFmt
+import com.v2ray.ang.limm.LimmConfig
 import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
@@ -553,6 +556,11 @@ object AngConfigManager {
             val proxyUsername = SettingsManager.getSocksUsername()
             val proxyPassword = SettingsManager.getSocksPassword()
 
+            // Remnawave HWID device-limit anti-sharing: stable per-device id + device info.
+            val hwid = LimmConfig.clientUid(AngApplication.application)
+            val deviceModel = Build.MODEL
+            val verOs = Build.VERSION.RELEASE
+
             var configText = try {
                 val httpPort = SettingsManager.getHttpPort()
                 HttpUtil.getUrlContentWithUserAgent(
@@ -562,7 +570,11 @@ object AngConfigManager {
                         timeout = 15000,
                         httpPort = httpPort,
                         proxyUsername = proxyUsername,
-                        proxyPassword = proxyPassword
+                        proxyPassword = proxyPassword,
+                        hwid = hwid,
+                        deviceOs = "Android",
+                        verOs = verOs,
+                        deviceModel = deviceModel
                     )
                 )
             } catch (e: Exception) {
@@ -574,7 +586,11 @@ object AngConfigManager {
                     HttpUtil.getUrlContentWithUserAgent(
                         UrlContentRequest(
                             url = url,
-                            userAgent = userAgent
+                            userAgent = userAgent,
+                            hwid = hwid,
+                            deviceOs = "Android",
+                            verOs = verOs,
+                            deviceModel = deviceModel
                         )
                     )
                 } catch (e: Exception) {

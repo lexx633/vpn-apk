@@ -162,6 +162,12 @@ object HttpUtil {
                 .header("User-agent", finalUserAgent)
                 .header("Connection", "close")
 
+            // Remnawave HWID device-limit: identify this device on subscription fetch.
+            request.hwid?.takeIf { it.isNotBlank() }?.let { requestBuilder.header("x-hwid", it) }
+            request.deviceOs?.takeIf { it.isNotBlank() }?.let { requestBuilder.header("x-device-os", it) }
+            request.verOs?.takeIf { it.isNotBlank() }?.let { requestBuilder.header("x-ver-os", it) }
+            request.deviceModel?.takeIf { it.isNotBlank() }?.let { requestBuilder.header("x-device-model", it) }
+
             applyEmbeddedBasicAuthHeader(currentUrl, requestBuilder)
 
             if (request.httpPort != 0 && !request.proxyUsername.isNullOrBlank() && !request.proxyPassword.isNullOrBlank()) {
