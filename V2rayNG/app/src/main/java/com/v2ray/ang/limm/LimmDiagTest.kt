@@ -261,14 +261,17 @@ object LimmDiagTest {
         // one) so the post-test phase can reuse the best tunnel instead of restarting it.
         var runningGuid: String? = null
 
-        for (guid in guids) {
+        for ((idx, guid) in guids.withIndex()) {
             val cfg = MmkvManager.decodeServerConfig(guid)
             val name = cfg?.remarks?.takeIf { it.isNotEmpty() } ?: guid.take(8)
+            // Ordinal in the on-screen log only (§ user request) — keeps `name` itself clean
+            // for ProfileResult/postFullTest/diag upload, which the server parses by tag.
+            val label = "${idx + 1}. $name"
 
             // Skip any leftover -awg profiles: AWG was removed, so testing one as plain xray
             // WireGuard would just report a broken tunnel and pollute the verdict.
             if (name.endsWith("-awg", ignoreCase = true)) {
-                onProgress("▸ $name (AWG)")
+                onProgress("▸ $label (AWG)")
                 continue
             }
 
@@ -281,7 +284,7 @@ object LimmDiagTest {
                 val host = cfg?.server
                 val port = cfg?.serverPort?.toIntOrNull()
                 if (host != null && port != null && !withContext(Dispatchers.IO) { tcpPrePing(host, port) }) {
-                    onProgress("\r▸ $name (TCP $host:$port недоступен)")
+                    onProgress("\r▸ $label (TCP $host:$port недоступен)")
                     Log.w(TAG, "profile $name: TCP pre-ping failed $host:$port")
                     profileResults.add(ProfileResult(name, false, null, guid = guid))
                     continue
@@ -296,7 +299,7 @@ object LimmDiagTest {
                 runningGuid = null
             }
 
-            onProgress("▸ $name")
+            onProgress("▸ $label")
             Log.i(TAG, "--- profile: $name ($guid) ---")
 
             withContext(Dispatchers.Main) {
@@ -309,7 +312,7 @@ object LimmDiagTest {
 
             val socksReady = waitForSocks(socksPort)
             if (!socksReady) {
-                onProgress("\r▸ $name (SOCKS timeout)")
+                onProgress("\r▸ $label (SOCKS timeout)")
                 Log.w(TAG, "profile $name: SOCKS timeout")
                 profileResults.add(ProfileResult(name, false, null, guid = guid))
                 // F1.1: leave the stop to the top of the next iteration (runningGuid stays set).
@@ -338,9 +341,9 @@ object LimmDiagTest {
             val live = if (vpnOk) withContext(Dispatchers.IO) { liveness204ViaSocks(socksPort) } else false
             val degraded = vpnOk && !live
             if (vpnOk) {
-                onProgress("\r▸ $name [${ms}ms] ✓${if (degraded) " ⚠no-204" else ""}")
+                onProgress("\r▸ $label [${ms}ms] ✓${if (degraded) " ⚠no-204" else ""}")
             } else {
-                onProgress("\r▸ $name (нет ответа)")
+                onProgress("\r▸ $label (нет ответа)")
             }
             Log.i(TAG, "profile $name: egress=$egress ok=$vpnOk live204=$live ms=$ms")
             profileResults.add(ProfileResult(name, vpnOk, if (vpnOk) ms else null, egress, degraded, guid))
@@ -443,6 +446,14 @@ object LimmDiagTest {
 
         // Fallback: upload log without VPN (only when no working profile was found).
         if (!logUploaded) {
+            if (bestResult == null) {
+                // Все профили недоступны — вероятно, текущая сеть (моб. оператор) блокирует
+                // limm.space целиком, а не только туннели. Без паузы лог просто не уйдёт
+                // ("connection closed") и мы теряем единственную диагностику инцидента.
+                // Даём окно переключиться на Wi-Fi, откуда сервер обычно доступен напрямую.
+                onProgress("\n⏸ Ни один профиль не поднялся. Жду 60 сек — переключитесь на Wi-Fi, чтобы лог отправился…")
+                delay(60_000)
+            }
             onProgress("\n📤 Отправляю лог на сервер…")
             val (logOk, logMsg) = withContext(Dispatchers.IO) { LimmLogReporter.send(ctx) }
             onProgress(if (logOk) " ✓ Лог отправлен" else " ✗ $logMsg")
