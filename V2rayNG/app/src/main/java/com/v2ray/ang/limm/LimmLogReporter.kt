@@ -85,6 +85,31 @@ object LimmLogReporter {
         }
     }
 
+    /**
+     * Underlying (non-VPN) transport: wifi / cellular[/operator] / ethernet.
+     * `label` is a user-set device name, so without this the server cannot tell a
+     * wifi run from a mobile one — which already led to a wrong blocking diagnosis.
+     */
+    private fun netType(context: Context): String = try {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        val caps = cm.allNetworks.mapNotNull { cm.getNetworkCapabilities(it) }
+            .filter { !it.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) }
+        val t = when {
+            caps.any { it.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) } -> "wifi"
+            caps.any { it.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) } -> "cellular"
+            caps.any { it.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) } -> "ethernet"
+            caps.isEmpty() -> "none"
+            else -> "other"
+        }
+        if (t == "cellular") {
+            val op = (context.getSystemService(Context.TELEPHONY_SERVICE)
+                as android.telephony.TelephonyManager).networkOperatorName.orEmpty()
+            if (op.isNotEmpty()) "cellular/$op" else t
+        } else t
+    } catch (e: Exception) {
+        "unknown"
+    }
+
     private fun build(context: Context): JSONObject {
         val guid = MmkvManager.getSelectServer()
         val profile = guid?.let { MmkvManager.decodeServerConfig(it) }
@@ -110,6 +135,7 @@ object LimmLogReporter {
             put("app_version", LimmConfig.appVersion)
             put("os_version", "Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
             put("device", "${Build.MANUFACTURER} ${Build.MODEL}")
+            put("net", netType(context))
             put("selected_guid", guid ?: JSONObject.NULL)
             put("profile", if (profile != null) JsonUtil.toJson(profile) else JSONObject.NULL)
             put("core_config", configContent)
