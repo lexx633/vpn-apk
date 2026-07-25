@@ -47,6 +47,20 @@ object SettingsManager {
         migrateRoutingToRussia(context)
         migrateServerListToSubscriptions()
         migrateHysteria2PinSHA256()
+        migrateFragmentOn()
+    }
+
+    /**
+     * limm: фрагментация TLS/REALITY включена по умолчанию.
+     * У мобильных операторов ТСПУ пропускает TCP-коннект, но дропает ClientHello по SNI/JA3 —
+     * разбитый на куски hello не собирается в сигнатуру. Одноразовая миграция: если юзер потом
+     * снимет галку сам, повторно не включаем.
+     */
+    private fun migrateFragmentOn() {
+        val key = "limm_fragment_v1"
+        if (MmkvManager.decodeSettingsBool(key)) return
+        MmkvManager.encodeSettings(AppConfig.PREF_FRAGMENT_ENABLED, true)
+        MmkvManager.encodeSettings(key, true)
     }
 
     /**

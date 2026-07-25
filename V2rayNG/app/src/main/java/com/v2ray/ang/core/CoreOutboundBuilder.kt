@@ -605,6 +605,11 @@ object CoreOutboundBuilder {
             if (streamSettings.sockopt?.dialerProxy.isNotNullEmpty()) {
                 return true
             }
+            // limm: hysteria2 несёт свой QUIC-хендшейк — udp-noise ломает его,
+            // а фрагментировать там нечего (TLS внутри QUIC, не в TCP-потоке).
+            if (streamSettings.network == NetworkType.HYSTERIA.type) {
+                return true
+            }
 
             var packets =
                 MmkvManager.decodeSettingsString(AppConfig.PREF_FRAGMENT_PACKETS) ?: "tlshello"
