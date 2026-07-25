@@ -137,8 +137,11 @@ object LimmDiagTest {
     }
 
     /** F3.1: raw TCP reachability of the transport's host:port before spinning up the core —
-     *  a dead TCP transport can't tunnel, so skip the heavy egress probe. 1 retry. */
-    private fun tcpPrePing(host: String, port: Int, timeoutMs: Int = 1500): Boolean {
+     *  a dead TCP transport can't tunnel, so skip the heavy egress probe. 1 retry.
+     *  Timeout matches SpeedtestManager.socketConnectTime (3000ms) — 1500ms was too tight
+     *  on mobile networks with degraded RTT/retransmits, causing false "недоступен" verdicts
+     *  on profiles that reach.sh (curl, 3 tries) confirmed reachable at the same moment. */
+    private fun tcpPrePing(host: String, port: Int, timeoutMs: Int = 3000): Boolean {
         repeat(2) { attempt ->
             try {
                 Socket().use { it.connect(InetSocketAddress(host, port), timeoutMs); return true }
