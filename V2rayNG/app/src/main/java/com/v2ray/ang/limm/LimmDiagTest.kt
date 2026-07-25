@@ -223,6 +223,11 @@ object LimmDiagTest {
         isRunning = true   // suppress allowInsecure red-toast while the test churns profiles
         try {
 
+        // Capture BEFORE the test touches anything: the fallback log-upload path below can wait
+        // up to 60s for the user to switch to Wi-Fi, so reading net type at send-time would
+        // report "wifi" for a run that actually happened on a blocking cellular network.
+        LimmLogReporter.cachedNetType = LimmLogReporter.netType(ctx)
+
         val wasRunning = CoreServiceManager.isRunning() || vpnTransportUp(ctx)
         if (wasRunning) {
             onProgress("⏹ Останавливаю VPN…")

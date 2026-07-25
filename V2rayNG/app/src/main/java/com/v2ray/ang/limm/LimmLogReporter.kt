@@ -37,6 +37,16 @@ object LimmLogReporter {
      */
     var cachedDiagResults: JSONArray? = null
 
+    /**
+     * Network type captured when a Full Test STARTS, not when the log upload happens.
+     * The fallback path waits up to 60s for the user to switch to Wi-Fi so the upload
+     * succeeds — recomputing net type at send-time would then report "wifi" for a test
+     * that actually ran on a blocked cellular network, hiding exactly the failure we're
+     * trying to diagnose. Set by LimmDiagTest.run(), read (and left set) by build().
+     */
+    @Volatile
+    var cachedNetType: String? = null
+
     /** True if a local SOCKS inbound is listening (VPN up) — so the upload can ride the tunnel. */
     private fun isSocksOpen(port: Int): Boolean = try {
         java.net.Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 400); true }
@@ -90,7 +100,7 @@ object LimmLogReporter {
      * `label` is a user-set device name, so without this the server cannot tell a
      * wifi run from a mobile one — which already led to a wrong blocking diagnosis.
      */
-    private fun netType(context: Context): String = try {
+    fun netType(context: Context): String = try {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
         val caps = cm.allNetworks.mapNotNull { cm.getNetworkCapabilities(it) }
             .filter { !it.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) }
@@ -135,7 +145,7 @@ object LimmLogReporter {
             put("app_version", LimmConfig.appVersion)
             put("os_version", "Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
             put("device", "${Build.MANUFACTURER} ${Build.MODEL}")
-            put("net", netType(context))
+            put("net", cachedNetType ?: netType(context))
             put("selected_guid", guid ?: JSONObject.NULL)
             put("profile", if (profile != null) JsonUtil.toJson(profile) else JSONObject.NULL)
             put("core_config", configContent)
