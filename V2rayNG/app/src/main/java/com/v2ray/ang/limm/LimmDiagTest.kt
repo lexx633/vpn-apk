@@ -74,6 +74,13 @@ object LimmDiagTest {
     // hy2 (UDP-handshake) иногда чуть дольше базовых 10s — даём 12s, чтобы не флапал в fail.
     private const val HY2_EGRESS_TIMEOUT_SEC = 6L    // hy2: 6s × 2 = ~12s
     private const val HY2_EGRESS_RETRY_MAX = 2
+    // CoreServiceManager.stopVService() шлёт остановку xray-core асинхронно (Go-сторона стопается
+    // корутиной без await — см. комментарий у SOCKS_CLOSE_MAX_MS). waitForSocksClosed видит только
+    // закрытие локального SOCKS-порта, но не гарантирует, что core реально освободил UDP/QUIC-сокеты
+    // предыдущего профиля. Профили hy2/tuic (UDP) освобождаются асинхроннее обычного TCP+REALITY —
+    // если СЛЕДУЮЩИЙ профиль в очереди обычный TCP (напр. DE1-pool сразу после PL1-hy2/PL1-tc в
+    // подписке), он иногда ложно не поднимался. Даём лишний запас именно в этом переходе.
+    private const val POST_UDP_EXTRA_DELAY_MS = 1000L
 
     private fun vpnTransportUp(ctx: Context): Boolean = try {
         val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -257,9 +264,17 @@ object LimmDiagTest {
         onProgress("\n── Профили (${guids.size}) ──")
 
         // F2.3: warm up VpnService once so the first profile doesn't pay the cold-start penalty.
-        if (savedGuid != null) {
+        // Warm up on guids[0] (not the arbitrary savedGuid) — that's the profile the loop below
+        // tests FIRST (currently DE1-xhttp), so the cold REALITY+XHTTP dial happens during warm-up,
+        // not during the graded run. Falls back to savedGuid if the list is somehow empty.
+        val warmupGuid = guids.firstOrNull() ?: savedGuid
+        if (warmupGuid != null) {
             onProgress("🔥 Прогрев…")
-            withContext(Dispatchers.Main) { if (!isActive) return@withContext; CoreServiceManager.startVService(ctx) }
+            withContext(Dispatchers.Main) {
+                if (!isActive) return@withContext
+                MmkvManager.setSelectServer(warmupGuid)
+                CoreServiceManager.startVService(ctx)
+            }
             waitForSocks(socksPort)
             withContext(Dispatchers.Main) { if (!isActive) return@withContext; CoreServiceManager.stopVService(ctx) }
             delay(500)
@@ -270,6 +285,8 @@ object LimmDiagTest {
         // F1.1: profile left running from the previous iteration (stopped at the top of the next
         // one) so the post-test phase can reuse the best tunnel instead of restarting it.
         var runningGuid: String? = null
+        // Tracks whether the profile just stopped was UDP (hy2/tuic) — see POST_UDP_EXTRA_DELAY_MS.
+        var runningWasUdp = false
 
         for ((idx, guid) in guids.withIndex()) {
             val cfg = MmkvManager.decodeServerConfig(guid)
@@ -306,7 +323,15 @@ object LimmDiagTest {
                 withContext(Dispatchers.Main) { if (!isActive) return@withContext; CoreServiceManager.stopVService(ctx) }
                 delay(500)
                 withContext(Dispatchers.IO) { waitForSocksClosed(socksPort) }
+                // POST_UDP_EXTRA_DELAY_MS: the previous profile was UDP (hy2/tuic) — its teardown
+                // on the Go side runs in an un-awaited coroutine (see stopVService), so the local
+                // SOCKS port closing doesn't guarantee UDP/QUIC sockets are released yet. Give the
+                // next (typically TCP+REALITY) profile extra breathing room before it dials.
+                if (runningWasUdp) {
+                    delay(POST_UDP_EXTRA_DELAY_MS)
+                }
                 runningGuid = null
+                runningWasUdp = false
             }
 
             onProgress("▸ $label")
@@ -318,6 +343,7 @@ object LimmDiagTest {
                 CoreServiceManager.startVService(ctx)
             }
             runningGuid = guid
+            runningWasUdp = isUdp
             delay(100)
 
             var socksReady = waitForSocks(socksPort)
