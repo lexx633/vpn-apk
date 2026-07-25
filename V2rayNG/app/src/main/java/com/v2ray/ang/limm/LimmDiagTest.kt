@@ -52,7 +52,12 @@ object LimmDiagTest {
     private const val TAG = "LimmDiag"
     private const val SOCKS_WAIT_MAX_MS = 6_000L   // 10s → 6s: большинство профилей поднимаются за 2-3s
     private const val SOCKS_POLL_MS = 150L
-    private const val SOCKS_CLOSE_MAX_MS = 3_000L  // 6s → 3s: ждём гибели старого xray
+    // 3s → 5s: CoreServiceManager.stopVService() шлёт async broadcast, а сама остановка xray
+    // (stopCoreLoop) на Go-стороне ничем не awaitится — CoreVpnService полагается на голый
+    // Thread.sleep(100) "на глаз" перед закрытием TUN. На нагруженной/мобильной сети 3s иногда
+    // не хватало: новый профиль стартовал раньше, чем старый xray освобождал SOCKS-порт, тихо не
+    // поднимался ("address in use"), и это выглядело как ложное "нет ответа" у СЛЕДУЮЩЕГО профиля.
+    private const val SOCKS_CLOSE_MAX_MS = 5_000L
     // Бюджет на профиль ограничен (~12s макс): egressViaSocks пробует ОДИН url (ipify), без
     // второго фолбэка — раньше 2 url × таймаут × ретраи давали до 90s на одном профиле («борщ»).
     private const val EGRESS_TIMEOUT_SEC = 5L        // не-xhttp: 5s × 3 = ~15s
@@ -315,10 +320,26 @@ object LimmDiagTest {
             runningGuid = guid
             delay(100)
 
-            val socksReady = waitForSocks(socksPort)
+            var socksReady = waitForSocks(socksPort)
+            if (!socksReady) {
+                // Один ретрай для конкретной гонки (см. комментарий у SOCKS_CLOSE_MAX_MS): старый
+                // xray мог не успеть освободить SOCKS-порт до старта нового, и новый процесс тихо
+                // не поднялся. Полный передозвон с чистым освобождением порта отличает эту гонку
+                // от реально мёртвого профиля вместо того, чтобы сразу писать "нет ответа".
+                Log.w(TAG, "profile $name: SOCKS not up on first try, retrying once")
+                withContext(Dispatchers.Main) { if (!isActive) return@withContext; CoreServiceManager.stopVService(ctx) }
+                delay(500)
+                withContext(Dispatchers.IO) { waitForSocksClosed(socksPort) }
+                withContext(Dispatchers.Main) {
+                    if (!isActive) return@withContext
+                    CoreServiceManager.startVService(ctx)
+                }
+                delay(200)
+                socksReady = waitForSocks(socksPort)
+            }
             if (!socksReady) {
                 onProgress("\r▸ $label (SOCKS timeout)")
-                Log.w(TAG, "profile $name: SOCKS timeout")
+                Log.w(TAG, "profile $name: SOCKS timeout after retry")
                 profileResults.add(ProfileResult(name, false, null, guid = guid))
                 // F1.1: leave the stop to the top of the next iteration (runningGuid stays set).
                 continue
