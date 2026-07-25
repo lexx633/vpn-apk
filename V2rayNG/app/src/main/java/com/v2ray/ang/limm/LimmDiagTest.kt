@@ -276,7 +276,7 @@ object LimmDiagTest {
             val name = cfg?.remarks?.takeIf { it.isNotEmpty() } ?: guid.take(8)
             // Ordinal in the on-screen log only (§ user request) — keeps `name` itself clean
             // for ProfileResult/postFullTest/diag upload, which the server parses by tag.
-            val label = "${idx + 1}. $name"
+            val label = "${idx + 1} $name"
 
             // Skip any leftover -awg profiles: AWG was removed, so testing one as plain xray
             // WireGuard would just report a broken tunnel and pollute the verdict.
