@@ -13,6 +13,7 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.v2ray.ang.core.CoreNativeManager
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -193,10 +194,10 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
         private fun foregroundIteration(ctx: Context, cm: ConnectivityManager) {
             setStage(ctx, "проверяю, назначена ли цель (targets)")
             val targets = getTargets(cm)
-            val ip = targets?.first
+            val ip = targets?.ip
             if (!ip.isNullOrBlank() && ip != lastCheckedIp) {
                 setStage(ctx, "новый IP $ip — беру в работу")
-                runDiagnostic(ctx, cm, ip, targets.second)
+                runDiagnostic(ctx, cm, ip, targets.ports, targets.vless)
                 lastCheckedIp = ip
                 setStage(ctx, "idle: $ip проверен, жду новый IP")
             } else {
@@ -272,13 +273,13 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
 
             setStage(ctx, "получаю цель проверки (targets)")
             val targets = getTargets(cm) ?: run { setStage(ctx, "idle: сервер недоступен (targets)"); return }
-            val ip = targets.first
-            val ports = targets.second
+            val ip = targets.ip
+            val ports = targets.ports
             if (ip.isNullOrBlank()) {
                 setStage(ctx, "idle: цель ещё не назначена сервером")
                 return
             }
-            runDiagnostic(ctx, cm, ip, ports)
+            runDiagnostic(ctx, cm, ip, ports, targets.vless)
             lastCheckedIp = ip
             setStage(ctx, "idle: отчёт отправлен, жду следующее окно")
         }
@@ -294,19 +295,25 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
 
         /** Батарея проверок + отправка отчёта для одного IP. Общая для background-цикла
          *  ([runCycle]) и непрерывного foreground-цикла ([foregroundIteration]). */
-        private fun runDiagnostic(ctx: Context, cm: ConnectivityManager, ip: String, ports: List<Int>) {
+        private fun runDiagnostic(
+            ctx: Context, cm: ConnectivityManager, ip: String, ports: List<Int>,
+            vless: ReachVlessParams? = null
+        ) {
             if (!diagnosticInProgress.compareAndSet(false, true)) {
                 setStage(ctx, "idle: другая проверка уже идёт, пропускаю")
                 return
             }
             try {
-                runDiagnosticLocked(ctx, cm, ip, ports)
+                runDiagnosticLocked(ctx, cm, ip, ports, vless)
             } finally {
                 diagnosticInProgress.set(false)
             }
         }
 
-        private fun runDiagnosticLocked(ctx: Context, cm: ConnectivityManager, ip: String, ports: List<Int>) {
+        private fun runDiagnosticLocked(
+            ctx: Context, cm: ConnectivityManager, ip: String, ports: List<Int>,
+            vless: ReachVlessParams? = null
+        ) {
             setStage(ctx, "привязка к сотовой сети для проверок")
             val network = bindCellular(cm) // может вернуть null, если cellular недоступен
             try {
@@ -326,6 +333,15 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
                 setStage(ctx, "проверка $ip:443 — http/quic")
                 checks += check(ip, 443, "http_443", reportId, operator, netType) { httpCheck(ip, 443, network) }
                 checks += check(ip, 443, "quic", reportId, operator, netType) { quicCheck(ip, 443, network) }
+                if (vless != null) {
+                    // Самый сильный сигнал: реальное VLESS+REALITY-соединение (не голый TLS-хендшейк).
+                    // Если сервер не прислал vless_params (старая цель/set-target без них) — пропускаем,
+                    // чтобы не ломать обратную совместимость.
+                    setStage(ctx, "проверка $ip:${vless.port} — реальное VLESS-соединение")
+                    checks += check(ip, vless.port, "vless_connect", reportId, operator, netType) {
+                        vlessConnectCheck(ip, vless)
+                    }
+                }
 
                 setStage(ctx, "отправка отчёта на сервер")
                 postReport(ctx, cm, ip, reportId, checks, operator, netType)
@@ -362,8 +378,18 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
             }
         }
 
-        /** Возвращает (ip, ports) либо null при ошибке сети (обеих — cellular и Wi-Fi). */
-        private fun getTargets(cm: ConnectivityManager): Pair<String?, List<Int>>? {
+        /** Параметры реального VLESS+REALITY-инбаунда цели (см. api.py set-target) — нужны,
+         *  чтобы поднять НАСТОЯЩЕЕ соединение (vlessConnectCheck), а не только TCP/TLS-пробу. */
+        data class ReachVlessParams(
+            val uuid: String, val pbk: String, val sid: String, val sni: String, val port: Int
+        )
+
+        /** Цель диагностики: IP, список портов для TCP/TLS-проб, и опционально vless-параметры
+         *  реального REALITY-инбаунда (null — сервер не прислал, значит vless_connect пропускаем). */
+        data class ReachTargets(val ip: String?, val ports: List<Int>, val vless: ReachVlessParams?)
+
+        /** Возвращает цель либо null при ошибке сети (обеих — cellular и Wi-Fi). */
+        private fun getTargets(cm: ConnectivityManager): ReachTargets? {
             return controlCall(cm) { network ->
                 val c = controlClient(network).build()
                 val req = Request.Builder()
@@ -383,7 +409,18 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
                         if (p > 0) ports.add(p)
                     }
                     if (ports.isEmpty()) ports.addAll(listOf(443, 8443, 8444))
-                    ip to ports
+                    val vlessObj = body.optJSONObject("vless")
+                    val vless = if (vlessObj != null) {
+                        val uuid = vlessObj.optString("uuid", "")
+                        val pbk = vlessObj.optString("pbk", "")
+                        val sid = vlessObj.optString("sid", "")
+                        val sni = vlessObj.optString("sni", "")
+                        val vp = vlessObj.optInt("port", -1)
+                        if (uuid.isNotBlank() && pbk.isNotBlank() && sni.isNotBlank() && vp > 0) {
+                            ReachVlessParams(uuid, pbk, sid, sni, vp)
+                        } else null
+                    } else null
+                    ReachTargets(ip, ports, vless)
                 }
             }
         }
@@ -604,6 +641,64 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
                     sock.close()
                 }
             } catch (e: Exception) { "QUIC_TIMEOUT" }
+        }
+
+        /**
+         * Реальное VLESS+REALITY-соединение через ядро xray (Libv2ray.measureOutboundDelay,
+         * тот же механизм, что и RealPingWorkerService для speed-теста профилей). Строит
+         * временный outbound-only конфиг (без inbounds/routing-правил — только outbound-цель),
+         * не трогает основной CoreServiceManager.coreController — движок сам поднимает и рвёт
+         * временный инстанс внутри одного вызова. bindProcessToNetwork(cellular), выставленный
+         * выше в runDiagnosticLocked, действует на весь процесс — Go-сокеты внутри тоже пойдут
+         * через привязанную сотовую сеть.
+         */
+        private fun vlessConnectCheck(ip: String, v: ReachVlessParams): String {
+            return try {
+                val config = buildVlessRealityConfig(ip, v)
+                val delay = CoreNativeManager.measureOutboundDelay(config, "https://www.gstatic.com/generate_204")
+                if (delay >= 0) "VLESS_OK" else "VLESS_FAIL"
+            } catch (e: Exception) { "VLESS_FAIL" }
+        }
+
+        private fun buildVlessRealityConfig(ip: String, v: ReachVlessParams): String {
+            val user = JSONObject().apply {
+                put("id", v.uuid)
+                put("encryption", "none")
+                put("flow", "xtls-rprx-vision")
+            }
+            val vnext = JSONObject().apply {
+                put("address", ip)
+                put("port", v.port)
+                put("users", JSONArray().put(user))
+            }
+            val settings = JSONObject().apply { put("vnext", JSONArray().put(vnext)) }
+            val reality = JSONObject().apply {
+                put("show", false)
+                put("serverName", v.sni)
+                put("publicKey", v.pbk)
+                put("shortId", v.sid)
+                put("fingerprint", "chrome")
+            }
+            val streamSettings = JSONObject().apply {
+                put("network", "tcp")
+                put("security", "reality")
+                put("realitySettings", reality)
+            }
+            val outbound = JSONObject().apply {
+                put("tag", "proxy")
+                put("protocol", "vless")
+                put("settings", settings)
+                put("streamSettings", streamSettings)
+            }
+            return JSONObject().apply {
+                put("log", JSONObject().put("loglevel", "warning"))
+                put("inbounds", JSONArray())
+                put("outbounds", JSONArray().put(outbound))
+                put("routing", JSONObject().apply {
+                    put("domainStrategy", "AsIs")
+                    put("rules", JSONArray())
+                })
+            }.toString()
         }
 
         private fun openSocket(network: Network?): Socket {
