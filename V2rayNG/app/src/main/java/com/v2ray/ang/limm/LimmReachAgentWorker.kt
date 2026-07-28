@@ -14,7 +14,13 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.v2ray.ang.util.LogUtil
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -62,6 +68,13 @@ import javax.net.ssl.X509TrustManager
  *   3. Гоняем батарею проверок (tcp/tls/http на 443/8443/8444, icmp, quic, sanity) на cellular.
  *   4. POST /api/reach-agent/report — сервер сам вычисляет диагноз (diagnose_reach) и решает
  *      про ротацию IP; телефон только репортит сырые коды, ничего не решает сам.
+ *
+ * Живой статус (setStage/startStatusTicker): пока приложение открыто (MainActivity resumed)
+ * И тумблер включён, лёгкий тикер раз в ~20с шлёт POST /api/event {event_type: "reach_stage",
+ * note: <текущий этап>} — так на сервере видно, что происходит прямо сейчас ("idle: жду
+ * плановый цикл", "long-poll команды", "прогоняю tcp_443", "отправляю отчёт" и т.п.), не
+ * дожидаясь конца 15-минутного окна WorkManager. Это НЕ новый эндпоинт — переиспользует уже
+ * существующий /api/event (см. LimmFailover.postSwitchEvent), просто с другим event_type.
  */
 class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
 
@@ -120,6 +133,69 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
             if (enabled()) schedule(ctx) else cancel(ctx)
         }
 
+        // ── Живой статус / тикер (см. doc-comment файла) ─────────────────────────
+
+        @Volatile private var currentStage: String = "idle"
+        private var tickerJob: Job? = null
+        private val tickerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+        private fun setStage(s: String) {
+            currentStage = s
+            LogUtil.d(TAG, "reach-agent stage: $s")
+        }
+
+        /** Запускает тикер живого статуса — вызывать из MainActivity.onResume. No-op,
+         *  если тумблер выключен или тикер уже запущен. */
+        fun startStatusTicker(ctx: Context) {
+            if (!enabled() || !LimmConfig.isConfigured()) return
+            if (tickerJob?.isActive == true) return
+            val appCtx = ctx.applicationContext
+            tickerJob = tickerScope.launch {
+                while (isActive) {
+                    postStageEvent(appCtx, currentStage)
+                    delay(20_000)
+                }
+            }
+        }
+
+        /** Останавливает тикер — вызывать из MainActivity.onPause, чтобы не слать статус,
+         *  пока приложение свёрнуто (см. запрос: "в процессе работы приложения"). */
+        fun stopStatusTicker() {
+            tickerJob?.cancel()
+            tickerJob = null
+        }
+
+        /** Лёгкое best-effort событие на уже существующий /api/event (см. LimmFailover.
+         *  postSwitchEvent) — новый эндпоинт не заводим, event_type="reach_stage" достаточно
+         *  отличает эти записи в ленте events на сервере. */
+        private fun postStageEvent(ctx: Context, stage: String) {
+            if (!LimmConfig.isConfigured() || LimmConfig.token.isEmpty()) return
+            try {
+                val payload = JSONObject().apply {
+                    put("client_uid", LimmConfig.clientUid(ctx))
+                    put("event_type", "reach_stage")
+                    put("note", stage)
+                    put("app_version", LimmConfig.appVersion)
+                }
+                val client = OkHttpClient.Builder()
+                    .connectTimeout(8, TimeUnit.SECONDS)
+                    .readTimeout(8, TimeUnit.SECONDS)
+                    .build()
+                val body = payload.toString().toRequestBody("application/json".toMediaType())
+                val req = Request.Builder()
+                    .url("${LimmConfig.collectorUrl}/api/event")
+                    .header("Authorization", "Bearer ${LimmConfig.token}")
+                    .header("User-Agent", "limm-android/1.0")
+                    .post(body)
+                    .build()
+                client.newCall(req).execute().use { r ->
+                    if (!r.isSuccessful) LogUtil.w(TAG, "reach-stage post: ${r.code}")
+                }
+            } catch (e: Exception) {
+                LogUtil.w(TAG, "reach-stage post failed: ${e.message}")
+            }
+        }
+
         // ── Основной цикл ────────────────────────────────────────────────────────
 
         private fun runCycle(ctx: Context) {
@@ -128,6 +204,7 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
             // 1) Long-poll в ожидании команды. Большую часть окна проводим здесь —
             // сервер отдаёт ответ, как только выставлен command=check_now (см. api.py
             // handle_reach_agent_command), либо по своему внутреннему таймауту (55с/попытка).
+            setStage("long-poll: жду команду check_now")
             val deadline = System.currentTimeMillis() + LONGPOLL_BUDGET_MS
             var got = false
             while (System.currentTimeMillis() < deadline) {
@@ -142,11 +219,16 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
             // чтобы иметь свежие данные, если цель вообще выставлена.
             if (!got) LogUtil.d(TAG, "reach-agent: команда не пришла за окно — плановый прогон")
 
-            val targets = getTargets(cm) ?: return
+            setStage("получаю цель проверки (targets)")
+            val targets = getTargets(cm) ?: run { setStage("idle: сервер недоступен (targets)"); return }
             val ip = targets.first
             val ports = targets.second
-            if (ip.isNullOrBlank()) return // сервер ещё не назначил цель — нечего проверять
+            if (ip.isNullOrBlank()) {
+                setStage("idle: цель ещё не назначена сервером")
+                return
+            }
 
+            setStage("привязка к сотовой сети для проверок")
             val network = bindCellular(cm) // может вернуть null, если cellular недоступен
             try {
                 val reportId = UUID.randomUUID().toString()
@@ -154,16 +236,21 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
                 val operator = telephonyOperator(ctx)
                 val netType = if (network != null) "4G" else "unknown"
 
+                setStage("проверка $ip: sanity/icmp")
                 checks += check(ip, null, "sanity", reportId, operator, netType) { sanityCheck(network) }
                 checks += check(ip, null, "icmp", reportId, operator, netType) { icmpCheck(ip, network) }
                 for (p in ports) {
+                    setStage("проверка $ip:$p — tcp/tls")
                     checks += check(ip, p, "tcp_$p", reportId, operator, netType) { tcpCheck(ip, p, network) }
                     checks += check(ip, p, "tls_$p", reportId, operator, netType) { tlsCheck(ip, p, network) }
                 }
+                setStage("проверка $ip:443 — http/quic")
                 checks += check(ip, 443, "http_443", reportId, operator, netType) { httpCheck(ip, 443, network) }
                 checks += check(ip, 443, "quic", reportId, operator, netType) { quicCheck(ip, 443, network) }
 
+                setStage("отправка отчёта на сервер")
                 postReport(ctx, cm, ip, reportId, checks, operator, netType)
+                setStage("idle: отчёт отправлен, жду следующее окно")
             } finally {
                 // Обязательно снимаем process-wide bind: он держится на весь app-процесс (тот же
                 // UID, что и ядро xray), и если оставить его висеть — основной VPN-трафик рискует

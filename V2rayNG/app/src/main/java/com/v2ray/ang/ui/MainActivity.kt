@@ -240,10 +240,13 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         // Apply check-in toggle changes without requiring an app restart.
         com.v2ray.ang.limm.LimmCheckinWorker.reconcile(applicationContext)
         com.v2ray.ang.limm.LimmReachAgentWorker.reconcile(applicationContext)
+        // Живой статус reach-agent (раз в ~20с) — только пока приложение реально открыто.
+        com.v2ray.ang.limm.LimmReachAgentWorker.startStatusTicker(applicationContext)
     }
 
     override fun onPause() {
         super.onPause()
+        com.v2ray.ang.limm.LimmReachAgentWorker.stopStatusTicker()
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
