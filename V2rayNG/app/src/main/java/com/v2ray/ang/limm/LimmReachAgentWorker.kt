@@ -283,9 +283,30 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
             setStage(ctx, "idle: отчёт отправлен, жду следующее окно")
         }
 
+        // bindProcessToNetwork() — операция НА ВЕСЬ ПРОЦЕСС, а не на отдельный вызов. Фоновый
+        // WorkManager-цикл (runCycle) и foreground-цикл (foregroundIteration) — это ДВЕ разные
+        // корутины/потока, и если оба одновременно решат гонять диагностику (напр. на свежей
+        // установке WorkManager стартует почти сразу же, как открыто приложение), их bind/unbind
+        // друг друга перебивают — один отвязывает сеть, пока другой ещё держит соединения, и всё
+        // виснет. Этот lock гарантирует, что реально выполняется только один runDiagnostic разом;
+        // второй вызов просто тихо пропускается (у него будет следующая попытка).
+        private val diagnosticInProgress = java.util.concurrent.atomic.AtomicBoolean(false)
+
         /** Батарея проверок + отправка отчёта для одного IP. Общая для background-цикла
          *  ([runCycle]) и непрерывного foreground-цикла ([foregroundIteration]). */
         private fun runDiagnostic(ctx: Context, cm: ConnectivityManager, ip: String, ports: List<Int>) {
+            if (!diagnosticInProgress.compareAndSet(false, true)) {
+                setStage(ctx, "idle: другая проверка уже идёт, пропускаю")
+                return
+            }
+            try {
+                runDiagnosticLocked(ctx, cm, ip, ports)
+            } finally {
+                diagnosticInProgress.set(false)
+            }
+        }
+
+        private fun runDiagnosticLocked(ctx: Context, cm: ConnectivityManager, ip: String, ports: List<Int>) {
             setStage(ctx, "привязка к сотовой сети для проверок")
             val network = bindCellular(cm) // может вернуть null, если cellular недоступен
             try {
