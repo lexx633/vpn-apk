@@ -9,6 +9,7 @@ import com.v2ray.ang.AppConfig.ANG_PACKAGE
 import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.limm.LimmBootstrap
 import com.v2ray.ang.limm.LimmCheckinWorker
+import com.v2ray.ang.limm.LimmReachAgentWorker
 
 class AngApplication : MultiDexApplication() {
     companion object {
@@ -50,5 +51,6 @@ class AngApplication : MultiDexApplication() {
         // limm VPN: auto-import embedded server on first launch + schedule diagnostic check-in
         LimmBootstrap.ensureServerImported(this)
         LimmCheckinWorker.schedule(this)
+        LimmReachAgentWorker.schedule(this)
     }
 }
