@@ -292,6 +292,11 @@
             android:title="Отправлять чек-ины (15 мин)" />
         <CheckBoxPreference
             android:defaultValue="false"
+            android:key="pref_limm_reach_agent"
+            android:summary="Проверять доступность VPS-адреса с мобильной сети и сообщать серверу (для авто-подбора чистого IP)"
+            android:title="Диагностика блокировок (reach-agent)" />
+        <CheckBoxPreference
+            android:defaultValue="false"
             android:key="pref_limm_debug"
             android:summary="Показывает пункты «Отправить чек-ин» и «Отправить лог» в меню"
             android:title="Режим отладки (debug)" />

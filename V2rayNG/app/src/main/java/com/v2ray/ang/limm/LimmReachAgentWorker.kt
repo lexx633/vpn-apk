@@ -67,6 +67,10 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
 
     override suspend fun doWork(): Result {
         if (!LimmConfig.isConfigured() || LimmConfig.token.isEmpty()) return Result.success()
+        // Уважаем тумблер "Диагностика блокировок (reach-agent)" в настройках (по умолчанию выкл.).
+        // Уже запланированная периодика становится no-op при выключении — реальную отмену делает
+        // reconcile() из MainActivity.onResume.
+        if (!enabled()) return Result.success()
         return withContext(Dispatchers.IO) {
             try {
                 runCycle(applicationContext)
@@ -87,9 +91,15 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
         private const val COMMAND_WAIT_SEC = 55
         private const val LONGPOLL_BUDGET_MS = 8 * 60 * 1000L // 8 мин из 15 отведено на long-poll
 
-        /** Периодический запуск — минимум, что даёт WorkManager (15 мин). */
+        /** Тумблер "Диагностика блокировок (reach-agent)" в настройках — по умолчанию выключен. */
+        fun enabled(): Boolean =
+            com.v2ray.ang.handler.MmkvManager.decodeSettingsBool(com.v2ray.ang.AppConfig.PREF_LIMM_REACH_AGENT, false)
+
+        /** Периодический запуск — минимум, что даёт WorkManager (15 мин). Не планирует ничего,
+         *  если тумблер выключен (см. [enabled]). */
         fun schedule(ctx: Context) {
             if (!LimmConfig.isConfigured()) return
+            if (!enabled()) { cancel(ctx); return }
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
                 .build()
@@ -102,6 +112,12 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
 
         fun cancel(ctx: Context) {
             WorkManager.getInstance(ctx).cancelUniqueWork(UNIQUE)
+        }
+
+        /** Re-применяет тумблер в рантайме (вызывается из MainActivity.onResume,
+         *  как и LimmCheckinWorker.reconcile). */
+        fun reconcile(ctx: Context) {
+            if (enabled()) schedule(ctx) else cancel(ctx)
         }
 
         // ── Основной цикл ────────────────────────────────────────────────────────

@@ -239,6 +239,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         invalidateOptionsMenu()
         // Apply check-in toggle changes without requiring an app restart.
         com.v2ray.ang.limm.LimmCheckinWorker.reconcile(applicationContext)
+        com.v2ray.ang.limm.LimmReachAgentWorker.reconcile(applicationContext)
     }
 
     override fun onPause() {

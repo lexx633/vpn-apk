@@ -83,6 +83,7 @@ object AppConfig {
     const val PREF_LIMM_DEBUG = "pref_limm_debug"
     const val PREF_LIMM_SHOW_FULLTEST = "pref_limm_show_fulltest"
     const val PREF_LIMM_SEND_CHECKIN = "pref_limm_send_checkin"
+    const val PREF_LIMM_REACH_AGENT = "pref_limm_reach_agent"
 
     /** Cache keys. */
     const val CACHE_SUBSCRIPTION_ID = "cache_subscription_id"
