@@ -136,33 +136,81 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
         // ── Живой статус / тикер (см. doc-comment файла) ─────────────────────────
 
         @Volatile private var currentStage: String = "idle"
+        // Последний УЖЕ проверенный IP — чтобы при повторных итерациях foreground-цикла не
+        // гонять одну и ту же батарею проверок вхолостую, а сразу реагировать на смену цели.
+        @Volatile private var lastCheckedIp: String? = null
         private var tickerJob: Job? = null
         private val tickerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-        private fun setStage(s: String) {
+        /** Обновляет текущий этап и СРАЗУ (не по таймеру) шлёт его на сервер — событие
+         *  fire-and-forget, не блокирует основной поток проверки. */
+        private fun setStage(ctx: Context, s: String) {
             currentStage = s
             LogUtil.d(TAG, "reach-agent stage: $s")
+            tickerScope.launch { postStageEvent(ctx, s) }
         }
 
-        /** Запускает тикер живого статуса — вызывать из MainActivity.onResume. No-op,
-         *  если тумблер выключен или тикер уже запущен. */
+        /**
+         * Запускает НЕПРЕРЫВНЫЙ foreground-цикл — вызывать из MainActivity.onResume.
+         * НЕТ ожидания 15 минут: сразу при старте проверяем, назначена ли цель; если да —
+         * сразу гоняем батарею проверок и шлём отчёт; сразу же после — снова проверяем,
+         * не появился ли НОВЫЙ IP, и так по кругу, пока приложение открыто. Пейсинг между
+         * итерациями даёт long-poll getCommand(...) — он и так возвращается мгновенно, как
+         * только сервер выставит check_now (см. handle_reach_agent_trigger), либо максимум
+         * через ~15с по своему таймауту — 15-минутный WorkManager-цикл (см. [schedule]) здесь
+         * не участвует вообще, это отдельный fallback только для случая, когда приложение
+         * закрыто/свёрнуто (Android не даёт настоящих частых background-циклов без foreground-service).
+         * No-op, если тумблер выключен или цикл уже запущен.
+         */
         fun startStatusTicker(ctx: Context) {
             if (!enabled() || !LimmConfig.isConfigured()) return
             if (tickerJob?.isActive == true) return
             val appCtx = ctx.applicationContext
+            val cm = appCtx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            setStage(appCtx, "idle: приложение открыто, ищу цель")
             tickerJob = tickerScope.launch {
                 while (isActive) {
-                    postStageEvent(appCtx, currentStage)
-                    delay(20_000)
+                    try {
+                        foregroundIteration(appCtx, cm)
+                    } catch (e: Exception) {
+                        LogUtil.w(TAG, "reach-agent foreground iteration failed: ${e.message}")
+                        setStage(appCtx, "ошибка цикла: ${e.message}")
+                        delay(5_000)
+                    }
                 }
             }
         }
 
-        /** Останавливает тикер — вызывать из MainActivity.onPause, чтобы не слать статус,
-         *  пока приложение свёрнуто (см. запрос: "в процессе работы приложения"). */
+        /** Останавливает foreground-цикл — вызывать из MainActivity.onPause, чтобы не гонять
+         *  проверки, пока приложение свёрнуто (см. запрос: "в процессе работы приложения"). */
         fun stopStatusTicker() {
             tickerJob?.cancel()
             tickerJob = null
+        }
+
+        /** Одна итерация непрерывного foreground-цикла: цель → (если новая) проверка+отчёт →
+         *  снова ждать цель. Без фиксированных пауз — реагирует немедленно на новый IP. */
+        private fun foregroundIteration(ctx: Context, cm: ConnectivityManager) {
+            setStage(ctx, "проверяю, назначена ли цель (targets)")
+            val targets = getTargets(cm)
+            val ip = targets?.first
+            if (!ip.isNullOrBlank() && ip != lastCheckedIp) {
+                setStage(ctx, "новый IP $ip — беру в работу")
+                runDiagnostic(ctx, cm, ip, targets.second)
+                lastCheckedIp = ip
+                setStage(ctx, "idle: $ip проверен, жду новый IP")
+            } else {
+                setStage(
+                    ctx,
+                    if (ip.isNullOrBlank()) "idle: цель ещё не назначена сервером"
+                    else "idle: $ip уже проверен, жду новый"
+                )
+            }
+            // Пейсинг БЕЗ 15-минутного ожидания: long-poll возвращается сразу по check_now
+            // (принудительный триггер) либо максимум через ~15с — и в обоих случаях идём на
+            // следующую итерацию немедленно.
+            val cmd = getCommand(cm, 15)
+            if (cmd == "check_now") lastCheckedIp = null // форс-перепроверка даже того же IP
         }
 
         /** Лёгкое best-effort событие на уже существующий /api/event (см. LimmFailover.
@@ -204,7 +252,10 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
             // 1) Long-poll в ожидании команды. Большую часть окна проводим здесь —
             // сервер отдаёт ответ, как только выставлен command=check_now (см. api.py
             // handle_reach_agent_command), либо по своему внутреннему таймауту (55с/попытка).
-            setStage("long-poll: жду команду check_now")
+            // Это background-fallback (WorkManager, минимум 15 мин между запусками) — работает,
+            // только когда приложение закрыто/свёрнуто. Пока приложение открыто, используется
+            // непрерывный foregroundIteration()-цикл без этого ожидания (см. startStatusTicker).
+            setStage(ctx, "long-poll: жду команду check_now")
             val deadline = System.currentTimeMillis() + LONGPOLL_BUDGET_MS
             var got = false
             while (System.currentTimeMillis() < deadline) {
@@ -219,16 +270,23 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
             // чтобы иметь свежие данные, если цель вообще выставлена.
             if (!got) LogUtil.d(TAG, "reach-agent: команда не пришла за окно — плановый прогон")
 
-            setStage("получаю цель проверки (targets)")
-            val targets = getTargets(cm) ?: run { setStage("idle: сервер недоступен (targets)"); return }
+            setStage(ctx, "получаю цель проверки (targets)")
+            val targets = getTargets(cm) ?: run { setStage(ctx, "idle: сервер недоступен (targets)"); return }
             val ip = targets.first
             val ports = targets.second
             if (ip.isNullOrBlank()) {
-                setStage("idle: цель ещё не назначена сервером")
+                setStage(ctx, "idle: цель ещё не назначена сервером")
                 return
             }
+            runDiagnostic(ctx, cm, ip, ports)
+            lastCheckedIp = ip
+            setStage(ctx, "idle: отчёт отправлен, жду следующее окно")
+        }
 
-            setStage("привязка к сотовой сети для проверок")
+        /** Батарея проверок + отправка отчёта для одного IP. Общая для background-цикла
+         *  ([runCycle]) и непрерывного foreground-цикла ([foregroundIteration]). */
+        private fun runDiagnostic(ctx: Context, cm: ConnectivityManager, ip: String, ports: List<Int>) {
+            setStage(ctx, "привязка к сотовой сети для проверок")
             val network = bindCellular(cm) // может вернуть null, если cellular недоступен
             try {
                 val reportId = UUID.randomUUID().toString()
@@ -236,21 +294,20 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
                 val operator = telephonyOperator(ctx)
                 val netType = if (network != null) "4G" else "unknown"
 
-                setStage("проверка $ip: sanity/icmp")
+                setStage(ctx, "проверка $ip: sanity/icmp")
                 checks += check(ip, null, "sanity", reportId, operator, netType) { sanityCheck(network) }
                 checks += check(ip, null, "icmp", reportId, operator, netType) { icmpCheck(ip, network) }
                 for (p in ports) {
-                    setStage("проверка $ip:$p — tcp/tls")
+                    setStage(ctx, "проверка $ip:$p — tcp/tls")
                     checks += check(ip, p, "tcp_$p", reportId, operator, netType) { tcpCheck(ip, p, network) }
                     checks += check(ip, p, "tls_$p", reportId, operator, netType) { tlsCheck(ip, p, network) }
                 }
-                setStage("проверка $ip:443 — http/quic")
+                setStage(ctx, "проверка $ip:443 — http/quic")
                 checks += check(ip, 443, "http_443", reportId, operator, netType) { httpCheck(ip, 443, network) }
                 checks += check(ip, 443, "quic", reportId, operator, netType) { quicCheck(ip, 443, network) }
 
-                setStage("отправка отчёта на сервер")
+                setStage(ctx, "отправка отчёта на сервер")
                 postReport(ctx, cm, ip, reportId, checks, operator, netType)
-                setStage("idle: отчёт отправлен, жду следующее окно")
             } finally {
                 // Обязательно снимаем process-wide bind: он держится на весь app-процесс (тот же
                 // UID, что и ядро xray), и если оставить его висеть — основной VPN-трафик рискует
