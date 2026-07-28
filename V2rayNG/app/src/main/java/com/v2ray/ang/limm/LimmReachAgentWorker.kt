@@ -48,6 +48,14 @@ import javax.net.ssl.X509TrustManager
  * чтобы исключить Wi-Fi (решение TZ, п.1): без активного Wi-Fi-соединения это не требуется,
  * но при наличии Wi-Fi ConnectivityManager может выбрать его как дефолтную сеть.
  *
+ * Важно: командный канал (limm.space на RU1) — это ОТДЕЛЬНАЯ история от диагностируемого
+ * VPS-IP. Иногда сам оператор режет и RU1 (тот же общий DPI/блокировки), и тогда телефон с
+ * мобильной сети не может даже получить команду/цель или отправить отчёт — сотовый транспорт
+ * годится для тестов target-IP, но не гарантирован для связи с сервером. Поэтому getCommand/
+ * getTargets/postReport сперва пробуют дефолтную сеть, а при неудаче — explicit TRANSPORT_WIFI
+ * (см. controlCall/requestNetworkByTransport ниже). Диагностические же проверки (tcp/tls/...)
+ * ВСЕГДА идут через cellular — иначе тест через Wi-Fi не покажет реальную картину блокировки.
+ *
  * Цикл (сервер = api.py, эндпоинты reach-agent):
  *   1. GET /api/reach-agent/command?wait=N — long-poll, ждёт команду check_now либо таймаут.
  *   2. Если команда пришла — забираем актуальную цель GET /api/reach-agent/targets.
@@ -107,7 +115,7 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
             val deadline = System.currentTimeMillis() + LONGPOLL_BUDGET_MS
             var got = false
             while (System.currentTimeMillis() < deadline) {
-                val cmd = getCommand(COMMAND_WAIT_SEC)
+                val cmd = getCommand(cm, COMMAND_WAIT_SEC)
                 if (cmd == "check_now") { got = true; break }
                 // idle/ошибка сети — короткая пауза перед следующей long-poll итерацией
                 if (cmd == null) try { Thread.sleep(5000) } catch (e: InterruptedException) {
@@ -118,7 +126,7 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
             // чтобы иметь свежие данные, если цель вообще выставлена.
             if (!got) LogUtil.d(TAG, "reach-agent: команда не пришла за окно — плановый прогон")
 
-            val targets = getTargets() ?: return
+            val targets = getTargets(cm) ?: return
             val ip = targets.first
             val ports = targets.second
             if (ip.isNullOrBlank()) return // сервер ещё не назначил цель — нечего проверять
@@ -139,19 +147,25 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
                 checks += check(ip, 443, "http_443", reportId, operator, netType) { httpCheck(ip, 443, network) }
                 checks += check(ip, 443, "quic", reportId, operator, netType) { quicCheck(ip, 443, network) }
 
-                postReport(ctx, ip, reportId, checks, operator, netType)
+                postReport(ctx, cm, ip, reportId, checks, operator, netType)
             } finally {
-                if (network != null) try { cm.unregisterNetworkCallback(lastCallback!!) } catch (e: Exception) { }
+                // Обязательно снимаем process-wide bind: он держится на весь app-процесс (тот же
+                // UID, что и ядро xray), и если оставить его висеть — основной VPN-трафик рискует
+                // застрять на cellular даже когда пользователь на Wi-Fi.
+                if (network != null) {
+                    try { cm.bindProcessToNetwork(null) } catch (e: Exception) { }
+                    try { cm.unregisterNetworkCallback(lastCallback!!) } catch (e: Exception) { }
+                }
             }
         }
 
-        // ── HTTP к серверу (командный канал + отчёт) ────────────────────────────
+        // ── HTTP к серверу (командный канал + отчёт) ─────────────────────────────
+        // Командный канал НЕ привязан к cellular: если оператор режет и сам limm.space,
+        // пробуем сначала дефолтную сеть, а при неудаче — явный Wi-Fi (см. controlCall).
 
-        private fun getCommand(waitSec: Int): String? {
-            return try {
-                val c = OkHttpClient.Builder()
-                    .dns(LimmDns.IPV4_ONLY)
-                    .connectTimeout(10, TimeUnit.SECONDS)
+        private fun getCommand(cm: ConnectivityManager, waitSec: Int): String? {
+            return controlCall(cm) { network ->
+                val c = controlClient(network)
                     .readTimeout((waitSec + 10).toLong(), TimeUnit.SECONDS)
                     .build()
                 val req = Request.Builder()
@@ -160,28 +174,24 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
                     .header("User-Agent", "limm-android/1.0")
                     .get().build()
                 c.newCall(req).execute().use { r ->
-                    if (!r.isSuccessful) return null
+                    if (!r.isSuccessful) return@controlCall null
                     val body = JSONObject(r.body?.string() ?: "{}")
                     body.optString("command", "idle")
                 }
-            } catch (e: Exception) { null }
+            }
         }
 
-        /** Возвращает (ip, ports) либо null при ошибке сети. */
-        private fun getTargets(): Pair<String?, List<Int>>? {
-            return try {
-                val c = OkHttpClient.Builder()
-                    .dns(LimmDns.IPV4_ONLY)
-                    .connectTimeout(10, TimeUnit.SECONDS)
-                    .readTimeout(10, TimeUnit.SECONDS)
-                    .build()
+        /** Возвращает (ip, ports) либо null при ошибке сети (обеих — cellular и Wi-Fi). */
+        private fun getTargets(cm: ConnectivityManager): Pair<String?, List<Int>>? {
+            return controlCall(cm) { network ->
+                val c = controlClient(network).build()
                 val req = Request.Builder()
                     .url("${LimmConfig.collectorUrl}/api/reach-agent/targets")
                     .header("Authorization", "Bearer ${LimmConfig.token}")
                     .header("User-Agent", "limm-android/1.0")
                     .get().build()
                 c.newCall(req).execute().use { r ->
-                    if (!r.isSuccessful) return null
+                    if (!r.isSuccessful) return@controlCall null
                     val body = JSONObject(r.body?.string() ?: "{}")
                     val ip = body.optString("target_ip", "").ifBlank { null }
                     val portsArr = body.optJSONArray("ports") ?: JSONArray()
@@ -194,11 +204,11 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
                     if (ports.isEmpty()) ports.addAll(listOf(443, 8443, 8444))
                     ip to ports
                 }
-            } catch (e: Exception) { null }
+            }
         }
 
         private fun postReport(
-            ctx: Context, ip: String, reportId: String,
+            ctx: Context, cm: ConnectivityManager, ip: String, reportId: String,
             checks: List<JSONObject>, operator: String?, netType: String
         ) {
             val payload = JSONObject().apply {
@@ -209,21 +219,66 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
                 put("network_type", netType)
                 put("checks", JSONArray(checks))
             }
-            val c = OkHttpClient.Builder()
-                .dns(LimmDns.IPV4_ONLY)
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(15, TimeUnit.SECONDS)
-                .build()
-            val body = payload.toString().toRequestBody("application/json".toMediaType())
-            val req = Request.Builder()
-                .url("${LimmConfig.collectorUrl}/api/reach-agent/report")
-                .header("Authorization", "Bearer ${LimmConfig.token}")
-                .header("User-Agent", "limm-android/1.0")
-                .post(body)
-                .build()
-            c.newCall(req).execute().use { r ->
-                if (!r.isSuccessful) LogUtil.w(TAG, "report HTTP ${r.code}")
+            val ok = controlCall(cm) { network ->
+                val c = controlClient(network).build()
+                val body = payload.toString().toRequestBody("application/json".toMediaType())
+                val req = Request.Builder()
+                    .url("${LimmConfig.collectorUrl}/api/reach-agent/report")
+                    .header("Authorization", "Bearer ${LimmConfig.token}")
+                    .header("User-Agent", "limm-android/1.0")
+                    .post(body)
+                    .build()
+                c.newCall(req).execute().use { r -> if (r.isSuccessful) true else null }
             }
+            if (ok != true) LogUtil.w(TAG, "reach-agent report: не удалось отправить (ни default, ни Wi-Fi)")
+        }
+
+        private fun controlClient(network: Network?): OkHttpClient.Builder {
+            val b = OkHttpClient.Builder()
+                .dns(LimmDns.IPV4_ONLY)
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)
+            if (network != null) b.socketFactory(network.socketFactory)
+            return b
+        }
+
+        /**
+         * Пробует [action] на дефолтной сети (network=null); если результат null (ошибка/таймаут),
+         * запрашивает явный TRANSPORT_WIFI и повторяет. Возвращает null, если недоступно и то и то
+         * (нет Wi-Fi рядом либо и он не достаёт RU1 — тогда цикл просто откладывается на следующий раз).
+         */
+        private fun <T> controlCall(cm: ConnectivityManager, action: (Network?) -> T?): T? {
+            val direct = try { action(null) } catch (e: Exception) { null }
+            if (direct != null) return direct
+            var cb: ConnectivityManager.NetworkCallback? = null
+            return try {
+                val (wifi, callback) = requestNetworkByTransport(cm, NetworkCapabilities.TRANSPORT_WIFI)
+                cb = callback
+                if (wifi == null) null else try { action(wifi) } catch (e: Exception) { null }
+            } finally {
+                if (cb != null) try { cm.unregisterNetworkCallback(cb) } catch (e: Exception) { }
+            }
+        }
+
+        /** Запрашивает сеть заданного транспорта; возвращает (network, callback) — callback нужно
+         *  отписать после использования (см. controlCall/runCycle). */
+        private fun requestNetworkByTransport(
+            cm: ConnectivityManager, transport: Int, timeoutSec: Long = 6
+        ): Pair<Network?, ConnectivityManager.NetworkCallback> {
+            val request = NetworkRequest.Builder()
+                .addTransportType(transport)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            val latch = CountDownLatch(1)
+            var net: Network? = null
+            val cb = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) { net = network; latch.countDown() }
+            }
+            return try {
+                cm.requestNetwork(request, cb)
+                latch.await(timeoutSec, TimeUnit.SECONDS)
+                net to cb
+            } catch (e: Exception) { null to cb }
         }
 
         // ── Cellular bind ────────────────────────────────────────────────────────
@@ -237,24 +292,9 @@ class LimmReachAgentWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
          * (нет SIM/только Wi-Fi), возвращает null — проверки идут на текущей дефолтной сети.
          */
         private fun bindCellular(cm: ConnectivityManager): Network? {
-            val request = NetworkRequest.Builder()
-                .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .build()
-            val latch = CountDownLatch(1)
-            var net: Network? = null
-            val cb = object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) {
-                    net = network
-                    latch.countDown()
-                }
-            }
+            val (net, cb) = requestNetworkByTransport(cm, NetworkCapabilities.TRANSPORT_CELLULAR, timeoutSec = 8)
             lastCallback = cb
-            return try {
-                cm.requestNetwork(request, cb)
-                latch.await(8, TimeUnit.SECONDS)
-                net?.also { cm.bindProcessToNetwork(it) }
-            } catch (e: Exception) { null }
+            return net?.also { cm.bindProcessToNetwork(it) }
         }
 
         private fun telephonyOperator(ctx: Context): String? = try {
