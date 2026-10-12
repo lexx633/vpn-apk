@@ -23,7 +23,9 @@ import com.v2ray.ang.fmt.TrojanFmt
 import com.v2ray.ang.fmt.VlessFmt
 import com.v2ray.ang.fmt.VmessFmt
 import com.v2ray.ang.fmt.WireguardFmt
+import com.v2ray.ang.limm.LimmBootstrap
 import com.v2ray.ang.limm.LimmConfig
+import com.v2ray.ang.limm.LimmResiChain
 import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
@@ -607,6 +609,8 @@ object AngConfigManager {
                 it.subscription.lastUpdated = System.currentTimeMillis()
                 MmkvManager.encodeSubscription(it.guid, it.subscription)
                 LogUtil.i(AppConfig.TAG, "Subscription updated: ${it.subscription.remarks}, $count configs")
+                // limm: цепочки «RU-resi-gw → нода» пересобираются после каждого обновления Limm-подписки
+                if (it.guid == LimmBootstrap.SUB_GUID) LimmResiChain.sync()
                 return SubscriptionUpdateResult(
                     configCount = count,
                     successCount = 1

@@ -34,7 +34,11 @@ object LimmBootstrap {
     fun ensureServerImported(ctx: Context) {
         try {
             if (!LimmConfig.isConfigured()) return
-            if (mmkv.decodeBool(KEY_SUB_IMPORTED, false)) return
+            if (mmkv.decodeBool(KEY_SUB_IMPORTED, false)) {
+                // Уже импортировано: цепочки RU-resi появляются сразу после апдейта APK, не через 12ч
+                LimmResiChain.sync()
+                return
+            }
             if (!imported.compareAndSet(false, true)) return
 
             // Register / refresh the limm subscription and enable periodic auto-update.
