@@ -99,6 +99,17 @@ android {
             val limmReleaseCfg = signingConfigs.findByName("limmRelease")
             if (limmReleaseCfg?.storeFile != null) {
                 signingConfig = limmReleaseCfg
+            } else {
+                // E-200: без релизного ключа APK уходил неподписанным/чужой подписью и не вставал
+                // поверх установленного. Release без ключа — только явный отказ.
+                gradle.taskGraph.whenReady {
+                    if (allTasks.any { it.name.startsWith("assemble") && it.name.endsWith("Release") }) {
+                        throw GradleException(
+                            "limm: релизный keystore не найден (LIMM_KEYSTORE_PATH в limm.properties). " +
+                                "Положи limm-release.jks по этому пути — см. docs/ERRORS.md E-200."
+                        )
+                    }
+                }
             }
         }
     }
